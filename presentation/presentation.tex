@@ -1,0 +1,200 @@
+% !LW recipe=pdflatex only
+\documentclass[aspectratio=169]{beamer}
+
+% ---------- Packages ----------
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{pifont}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{colortbl}
+
+\newcommand{\cmark}{\textcolor{green!50!black}{\ding{51}}}
+\newcommand{\xmark}{\textcolor{red!70!black}{\ding{55}}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+
+% ---------- Theme ----------
+\usetheme{Madrid}
+\usecolortheme{default}
+
+\definecolor{TPBordeaux}{RGB}{140,30,45}
+\setbeamercolor{structure}{fg=TPBordeaux}
+% ---------- Title info ----------
+\title[Research Proeject RECH202]{Foundation model for EEG with residual vector quantized autoencoder}
+\author{Yanic ROTHLINGSHOFER}
+\institute[]{\large \it Télécom Paris}
+\date{\underline{Supervisor :} Van Tam Nguyen}
+
+% ---------- Logo ----------
+% Drop logo_TP.png next to this file (presentation/). Skipped silently if absent.
+% \titlegraphic{
+%     \vspace{0.2cm}
+%     \IfFileExists{logo_TP.png}{\includegraphics[width=0.1\linewidth]{logo_TP.png}}{}
+% }
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+\tableofcontents
+\end{frame}
+
+% ======================================================================
+\section{EEG-RQVAE architecture}
+% ======================================================================
+
+\begin{frame}{Encoding stage --- Mamba block}
+  \centering
+  \includegraphics[width=\linewidth,height=0.80\textheight,keepaspectratio]%
+    {../figures/encoder_stage/encoder_stage.pdf}
+
+  \vspace{0.3cm}
+  {\footnotesize $N_{\text{blocks}}$ residual conv + Mamba2 blocks per stage, then a stride-2 downsampling.}
+\end{frame}
+
+\begin{frame}{Model pipeline --- U-shaped autoencoder}
+  \centering
+  \includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]%
+    {../figures/model_pipeline/model_pipeline.pdf}
+\end{frame}
+
+\begin{frame}{Pretraining pipeline --- denoising VQ autoencoder}
+  \centering
+  \includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]%
+    {../figures/pretraining_pipeline/pretraining_pipeline.pdf}
+\end{frame}
+
+% ======================================================================
+\section{Pretraining objectives}
+% ======================================================================
+
+\begin{frame}{Multi-resolution STFT loss}
+  Compares reconstruction $\hat{x}$ and target $x$ in the time--frequency domain,
+  over several FFT resolutions $\mathcal{S}=\{64,128,256,512\}$ (Hann window, hop $=n/4$):
+  \[
+    \mathcal{L}_{\text{STFT}}
+    = \frac{1}{|\mathcal{S}|}\sum_{s\in\mathcal{S}}
+      \underbrace{\frac{\big\|\,|S_s\hat{x}|-|S_s x|\,\big\|_F}{\big\|\,|S_s x|\,\big\|_F}}_{\text{spectral convergence}}
+      \;+\;
+      \underbrace{\big\|\log|S_s\hat{x}|-\log|S_s x|\big\|_1}_{\text{log-magnitude}}
+  \]
+  where $S_s x$ is the STFT of $x$ at resolution $s$ (magnitude only).
+
+  \vspace{0.2cm}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \textbf{Advantages}
+      \begin{itemize}
+        \item \cmark\ Captures spectral content (EEG rhythms $\delta,\theta,\alpha,\beta,\gamma$) missed by time-domain L1.
+        \item \cmark\ Multi-resolution: both time and frequency detail.
+        \item \cmark\ Cheap and differentiable (FFT).
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \textbf{Drawbacks}
+      \begin{itemize}
+        \item \xmark\ Magnitude only: phase is ignored.
+        \item \xmark\ Fixed time/frequency trade-off per window.
+        \item \xmark\ Sensitive to window/hop choices.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Continuous Wavelet Transform (CWT) loss}
+  Same idea as STFT but with complex Morlet wavelets $\psi_a$ at scales $a\in A$ tuned to
+  EEG bands ($\delta$ to $\gamma$); $W_a x = x * \psi_a$:
+  \[
+    \mathcal{L}_{\text{CWT}}
+    = \frac{1}{|A|}\sum_{a\in A}
+      \frac{\big\|\,|W_a\hat{x}|-|W_a x|\,\big\|_F}{\big\|\,|W_a x|\,\big\|_F}
+      \;+\;
+      \big\|\log|W_a\hat{x}|-\log|W_a x|\big\|_1
+  \]
+
+  \vspace{0.2cm}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \textbf{Advantages}
+      \begin{itemize}
+        \item \cmark\ Adaptive time--frequency resolution: good for non-stationary EEG and transients.
+        \item \cmark\ Scales aligned with physiological bands.
+        \item \cmark\ Better low-frequency localisation than fixed STFT.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \textbf{Drawbacks}
+      \begin{itemize}
+        \item \xmark\ Computationally heavier (convolution at many scales).
+        \item \xmark\ Sensitive to mother wavelet / scale choice.
+        \item \xmark\ Currently disabled ($\lambda_{\text{cwt}}=0$) for cost.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Adversarial loss (hinge GAN)}
+  A discriminator $D$ learns to tell real EEG $x$ from reconstructions $\hat{x}$;
+  the autoencoder (generator $G$) tries to fool it:
+  \begin{align*}
+    \mathcal{L}_{D} &= \tfrac{1}{2}\,\mathbb{E}_{x}\big[\max(0,\,1-D(x))\big]
+                     + \tfrac{1}{2}\,\mathbb{E}_{\hat{x}}\big[\max(0,\,1+D(\hat{x}))\big]\\[2pt]
+    \mathcal{L}_{\text{adv}}^{G} &= -\,\mathbb{E}_{\hat{x}}\big[D(\hat{x})\big]
+  \end{align*}
+
+  \vspace{0.2cm}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \textbf{Advantages}
+      \begin{itemize}
+        \item \cmark\ Sharper, more realistic reconstructions (avoids the over-smoothing of L1/MSE).
+        \item \cmark\ Learns a data-driven perceptual criterion.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \textbf{Drawbacks}
+      \begin{itemize}
+        \item \xmark\ Training instability: needs a small weight / warm-up.
+        \item \xmark\ Risk of mode collapse.
+        \item \xmark\ Extra discriminator to train and tune.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ======================================================================
+\section{Downstream evaluation}
+% ======================================================================
+
+\begin{frame}{Downstream results (BACC)}
+  \centering
+  \renewcommand{\arraystretch}{1.3}
+  \resizebox{\linewidth}{!}{%
+  \begin{tabular}{l cccccc}
+    \toprule
+    \textbf{Model} & \textbf{BCI2A} & \textbf{PHYSIONETMI} & \textbf{SLEEPEDFX}
+                   & \textbf{SEEDV} & \textbf{FACED} & \textbf{TUAB} \\
+    \midrule
+    EEG-VAE (VQ-Mamba)        & -- & -- & -- & -- & -- & -- \\
+    EEG-VAE (KL-Mamba)        & -- & -- & -- & -- & -- & -- \\
+    EEG-VAE (VQ-Transformer)  & -- & -- & -- & -- & -- & -- \\
+    \midrule
+    CBraMod                   & -- & -- & -- & -- & -- & -- \\
+    EEGMamba                  & -- & -- & -- & -- & -- & -- \\
+    EEGPT                     & -- & -- & -- & -- & -- & -- \\
+    LUNA                      & -- & -- & -- & -- & -- & -- \\
+    FEMBA                     & -- & -- & -- & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}}
+
+  \vspace{0.3cm}
+  {\footnotesize Balanced accuracy (BACC), linear-probing / channel-training --- to be filled.}
+\end{frame}
+
+\end{document}

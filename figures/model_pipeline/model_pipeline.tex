@@ -1,0 +1,86 @@
+\documentclass[border=16pt]{standalone}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, backgrounds, fit}
+
+\begin{document}
+\begin{tikzpicture}[
+    font=\small,
+    x=1cm, y=1cm,
+    >={Stealth[length=2.6mm]},
+    io/.style   = {align=center, font=\ttfamily\footnotesize},
+    stage/.style= {draw, rounded corners=3pt, align=center, minimum width=30mm,
+                   minimum height=11mm},
+    adapt/.style= {stage, fill=blue!12},
+    enc/.style  = {stage, fill=teal!16},
+    dec/.style  = {stage, fill=orange!16},
+    bott/.style = {draw, rounded corners=3pt, align=center, minimum width=20mm,
+                   minimum height=10mm, fill=gray!12},
+    code/.style = {draw, rounded corners=2pt, align=center, minimum width=22mm,
+                   minimum height=12mm, fill=yellow!35, thick},
+    flow/.style = {->, thick},
+    lvl/.style  = {font=\ttfamily\scriptsize, gray!60!black},
+]
+
+% ---- level (time-resolution) guides on the far left ----
+\node[lvl] at (-4.4, 0)    {$T$};
+\node[lvl] at (-4.4,-2.2)  {$T/2$};
+\node[lvl] at (-4.4,-4.4)  {$T/4$};
+\node[lvl] at (-4.4,-6.6)  {$T/8$};
+
+% ================= ENCODER (left, descending) =================
+\node[enc] (e0) at (0, 0)    {MambaBlock $\times N$\\[1pt]$64$ ch,\ \ $T$};
+\node[enc] (e1) at (0,-2.2)  {MambaBlock $\times N$\\[1pt]$128$ ch,\ \ $T/2$};
+\node[enc] (e2) at (0,-4.4)  {MambaBlock $\times N$\\[1pt]$256$ ch,\ \ $T/4$};
+\node[enc] (e3) at (0,-6.6)  {MambaBlock $\times N$ + mid\\[1pt]$512$ ch,\ \ $T/8$};
+
+\draw[flow] (e0) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e1);
+\draw[flow] (e1) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e2);
+\draw[flow] (e2) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e3);
+
+% ================= DECODER (right, ascending) =================
+\node[dec] (d0) at (15, 0)   {MambaBlock $\times N$\\[1pt]$64$ ch,\ \ $T$};
+\node[dec] (d1) at (15,-2.2) {MambaBlock $\times N$\\[1pt]$128$ ch,\ \ $T/2$};
+\node[dec] (d2) at (15,-4.4) {MambaBlock $\times N$\\[1pt]$256$ ch,\ \ $T/4$};
+\node[dec] (d3) at (15,-6.6) {mid + MambaBlock $\times N$\\[1pt]$512$ ch,\ \ $T/8$};
+
+\draw[flow] (d3) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d2);
+\draw[flow] (d2) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d1);
+\draw[flow] (d1) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d0);
+
+% ================= FRONT: channel adaptor =================
+\node[io]    (xin)  at (-3.0, 2.1) {$x$\\$(B,\ C_{\text{in}},\ T)$};
+\node[adapt] (ca)   at (0, 2.1) {ChannelAdaptor\\[1pt]$C_{\text{in}}\!\to\!64$};
+\draw[flow] (xin) -- (ca);
+\draw[flow] (ca)  -- (e0);
+
+% ================= OUTPUT: reconstruction =================
+\node[adapt] (co)  at (15, 2.1) {conv\_out\\[1pt]$64\!\to\!C_{\text{out}}$};
+\node[io]    (xout) at (18.0, 2.1) {$\hat{x}$\\$(B,\ C_{\text{out}},\ T)$};
+\draw[flow] (d0) -- (co);
+\draw[flow] (co) -- (xout);
+
+% ================= BOTTOM OF THE U: bottleneck + codebook =================
+\node[bott] (bz) at (4.5,-6.6) {conv\_out\\[1pt]$\to z$};
+\node[code] (cb) at (7.5,-6.6) {VQ codebook\\[1pt]{\scriptsize $K$ codes, dim $z$}};
+\node[bott] (ci) at (10.5,-6.6) {conv\_in\\[1pt]$z\!\to\!512$};
+
+\draw[flow] (e3) -- (bz);
+\draw[flow] (bz) -- (cb);
+\draw[flow] (cb) -- (ci);
+\draw[flow] (ci) -- (d3);
+
+\node[io, below=1mm of cb] {$z:\ (B,\ z_{\text{ch}},\ T/8)$};
+
+% ================= titles / notes =================
+\node[font=\bfseries] at (0,3.3)  {Encoder};
+\node[font=\bfseries] at (15,3.3) {Decoder};
+\node[font=\bfseries] at (7.5,3.3) {EEGVAE\ \ (U-shaped autoencoder)};
+
+\node[align=center, font=\scriptsize] at (7.5,-8.4)
+    {Bottleneck = quantize $z$ to the nearest codebook entries
+     (VQ) \emph{or} a Gaussian posterior (KL).\\[1pt]
+     Decoder mirrors the encoder --- \textbf{no skip connections} (information passes only through $z$).};
+
+\end{tikzpicture}
+\end{document}

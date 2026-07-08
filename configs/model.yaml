@@ -1,0 +1,21 @@
+model:
+  in_channels: 19
+  out_channels: 19
+  channel_adaptor: true
+  adaptor_layers: 4
+  z_channels: 64
+  ch: 64
+  ch_mult: [1, 2, 4, 8]
+  n_blocks: 2
+  dropout: 0.0
+  mode: "vq"
+  num_embeddings: 256
+  n_quantizers: 8
+  commitment_cost: 0.25
+  decay: 0.99
+
+discriminator:
+  in_channels: 19
+  ndf: 64
+  n_layers: 3
+  use_actnorm: False

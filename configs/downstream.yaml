@@ -1,0 +1,54 @@
+checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/z_64/pretraining_best.pt
+dataset: BCI2A
+
+training:
+  out_dir: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/downstream/tests
+  task: classification
+  head: linear  # linear, conv, eegvae
+  freeze_backbone: true
+  freeze_channel_adaptor: false
+  num_epochs: 50
+  optimizer: "adamw"
+  scheduler: "onecycle"  # cosine, step, plateau, onecycle, none
+  lr: 0.0004
+  max_lr: 0.0004
+  onecycle_pct_start: 0.2
+  onecycle_div_factor: 25.0
+  onecycle_final_div_factor: 10000.0
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  grad_clip: 1.0
+  use_amp: false
+  log_step: 50
+  max_step_train: null
+  max_step_val: null
+  max_step_test: null
+
+  loss: cross_entropy
+  label_smoothing: 0.0
+  early_stopping_patience: 10
+  restore_best_checkpoint: true
+  monitoring_metric: BACC
+
+
+heads:
+  linear:
+    pooling: none  # mean, max, mean_std
+
+  conv:
+    hidden: 256
+    kernel_size: 3
+    n_layers: 2
+    dropout: 0.0
+    out_len: 4
+
+  eegvae:
+    pooling: mean_max
+    n_layer: 2
+    hidden_dim: 128
+    dropout: 0.2
+    norm: layernorm
+    temporal_kernel_size: 5
+    pyramid_bins: 4
+
+
