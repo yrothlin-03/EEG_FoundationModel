@@ -20,6 +20,27 @@ TARGET_CHS = ["FP1", "FP2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2",
               "F7", "F8", "T7", "T8", "P7", "P8", "FZ", "CZ", "PZ"]
 
 
+def mask_patches(x, patch_size, mask_ratio, generator=None):
+    B, C, T = x.shape
+    n_patches = T // patch_size
+    if n_patches == 0 or mask_ratio <= 0:
+        return x, x.new_zeros(B, T)
+
+    n_mask = min(n_patches, max(1, int(round(n_patches * mask_ratio))))
+
+    scores = torch.rand(B, n_patches, device=x.device, generator=generator)
+    idx = scores.argsort(dim=1)[:, :n_mask]
+    patch_mask = torch.zeros(B, n_patches, device=x.device, dtype=x.dtype)
+    patch_mask.scatter_(1, idx, 1.0)
+
+    time_mask = patch_mask.repeat_interleave(patch_size, dim=1)
+    if time_mask.shape[1] < T:
+        time_mask = torch.cat([time_mask, x.new_zeros(B, T - time_mask.shape[1])], dim=1)
+
+    x_masked = x * (1.0 - time_mask).unsqueeze(1)
+    return x_masked, time_mask
+
+
 class Trainer:
     def __init__(self, model, discriminator, loaders, pretraining_config):
         self.model = model
@@ -54,8 +75,12 @@ class Trainer:
         self.kl_weight = get("kl_loss_weight", 1e-6)
         self.adv_weight = get("adv_loss_weight", 0.01)
         self.stft_weight = get("stft_loss_weight", 1.0)
-        self.cwt_weight = get("cwt_loss_weight", 0.0)
         self.stft_sizes = get("sizes", [32, 128, 384])
+
+        mask_cfg = t.get("masking") or {}
+        self.mask_enabled = mask_cfg.get("enabled", False)
+        self.mask_patch_size = mask_cfg.get("patch_size", 32)
+        self.mask_ratio = mask_cfg.get("mask_ratio", 0.5)
 
         self.criterion = self._build_criterion()
         self.opt_g = self._build_optimizer(self.model, lr=self.lr, weight_decay=self.weight_decay)
@@ -130,9 +155,13 @@ class Trainer:
             rec_weight=self.rec_weight,
             kl_weight=self.kl_weight,
             stft_weight=self.stft_weight,
-            cwt_weight=self.cwt_weight,
             stft_sizes=self.stft_sizes,
         )
+
+    def _apply_masking(self, x_in):
+        if not self.mask_enabled:
+            return x_in, None
+        return mask_patches(x_in, self.mask_patch_size, self.mask_ratio)
 
     def _use_gan(self):
         return self.adv_start_epoch is not None and self.epoch >= self.adv_start_epoch
@@ -220,10 +249,11 @@ class Trainer:
             if self.max_train_step is not None and step >= self.max_train_step:
                 break
             x_in, x_tgt = self._prepare_batch(batch)
+            x_in, mask = self._apply_masking(x_in)
 
             with self._autocast():
                 pred, posterior = self.model(x_in)
-                loss, logs = self.criterion(pred, x_tgt, posterior)
+                loss, logs = self.criterion(pred, x_tgt, posterior, mask=mask)
                 if use_gan:
                     adv = generator_loss(self.disc(pred))
                     loss = loss + self.adv_weight * adv
@@ -267,9 +297,10 @@ class Trainer:
             if self.max_val_step is not None and step >= self.max_val_step:
                 break
             x_in, x_tgt = self._prepare_batch(batch)
+            x_in, mask = self._apply_masking(x_in)
             with self._autocast():
                 pred, posterior = self.model(x_in)
-                _, logs = self.criterion(pred, x_tgt, posterior)
+                _, logs = self.criterion(pred, x_tgt, posterior, mask=mask)
             for k, v in logs.items():
                 running[k] = running.get(k, 0.0) + v.item()
             count += 1

@@ -1,9 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
-from .mamba_blocks import MambaBlock
+from .blocks import build_block
 from .utils import Norm, DownSample
-
-
 
 
 class Encoder(nn.Module):
@@ -14,6 +12,7 @@ class Encoder(nn.Module):
         ch_mult=[1, 2, 4],
         dropout=0.0,
         n_blocks=2,
+        block_type="mamba",
     ):
         super().__init__()
 
@@ -28,7 +27,7 @@ class Encoder(nn.Module):
             block_in = ch * in_ch_mult[i]
             block_out = ch * in_ch_mult[i + 1]
             for _ in range(self.n_blocks):
-                block.append(MambaBlock(block_in, block_out, dropout=dropout))
+                block.append(build_block(block_type, block_in, block_out, dropout=dropout))
                 block_in = block_out
             stage = nn.Module()
             stage.block = block
@@ -36,7 +35,7 @@ class Encoder(nn.Module):
                 stage.downsample = DownSample(block_in)
             self.down.append(stage)
 
-        self.mid = MambaBlock(block_in, block_in, dropout=dropout)
+        self.mid = build_block(block_type, block_in, block_in, dropout=dropout)
         self.norm = Norm(block_in)
         self.conv_out = nn.Conv1d(block_in, z_channels, kernel_size=3, padding=1)
 

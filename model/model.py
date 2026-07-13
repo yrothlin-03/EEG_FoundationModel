@@ -13,10 +13,12 @@ class EEGVAE(nn.Module):
         out_channels=None,
         channel_adaptor=True,
         adaptor_layers=2,
+        use_cca=False,
         z_channels=4,
         ch=64,
         ch_mult=[1, 2, 4],
         n_blocks=2,
+        block_type="mamba",
         dropout=0.0,
         mode="kl",
         num_embeddings=512,
@@ -30,12 +32,15 @@ class EEGVAE(nn.Module):
         self.in_channels = in_channels
         self.mode = mode
         self.use_channel_adaptor = channel_adaptor
+        self.use_cca = use_cca
+        self.block_type = block_type
 
         if channel_adaptor:
             self.channel_adaptor = ChannelAdaptor(
                 in_channels=in_channels,
                 out_channels=ch,
                 n_layers=adaptor_layers,
+                use_cca=use_cca,
             )
             ae_in_channels = ch
         else:
@@ -49,6 +54,7 @@ class EEGVAE(nn.Module):
             ch=ch,
             ch_mult=ch_mult,
             n_blocks=n_blocks,
+            block_type=block_type,
             dropout=dropout,
             mode=mode,
             num_embeddings=num_embeddings,
@@ -130,7 +136,7 @@ class EEGVAE(nn.Module):
             ("Decoder", self.autoencoder.decoder, tuple(dec.shape)),
         ]
 
-        print(f"EEGVAE summary  (mode={self.mode})")
+        print(f"EEGVAE summary  (mode={self.mode}, block_type={self.block_type}, use_cca={self.use_cca})")
         print(f"{'Module':<16}{'Params':>12}   Output shape")
         print("-" * 56)
         print(f"{'input':<16}{'':>12}   {tuple(x.shape)}")
@@ -168,10 +174,12 @@ if __name__ == "__main__":
     test_config = dict(
         in_channels = 64,
         out_channels = 64,
+        use_cca=False,
         z_channels=16,
         ch=64,
         ch_mult=[1, 2, 4],
         n_blocks=2,
+        block_type="mamba",
         dropout=0.0,
         mode="vq",
         num_embeddings=512,

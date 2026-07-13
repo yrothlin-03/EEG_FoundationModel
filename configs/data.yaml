@@ -1,5 +1,5 @@
 data:
-  batch_size: 64
+  batch_size: 128
   split_ratio: [0.8, 0.1, 0.1]
   num_workers: 4
   pin_memory: true
@@ -22,7 +22,7 @@ PHYSIONETMI:
 
 
 
-SLEEPEDFX:
+SLEEPEDF:
   dataset_path: /projects/EEG-foundation-model/RECH202/tests_2/SLEEPEDF/sleepedf.lmdb
   n_classes: 5
   num_channels: 2
@@ -98,3 +98,9 @@ SIENA:
 SHUMI:
   dataset_path: /projects/EEG-foundation-model/RECH202/tests_2/SHUMI/shumi.lmdb
   n_classes: 2
+
+
+THINGSEEG:
+  dataset_path: /projects/EEG-foundation-model/RECH202/tests_2/TEEG2/teeg2.lmdb
+  img_root: /projects/EEG-foundation-model/RECH202/data/things-eeg2/imgs
+  n_classes: null

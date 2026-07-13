@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 from .utils import Norm
+from .criss_cross_attention import CCA_Module
 
 
 class SeparableBlock(nn.Module):
@@ -30,7 +31,7 @@ class SeparableBlock(nn.Module):
 
 
 class ChannelAdaptor(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, n_layers: int, kernel_size: int = 15):
+    def __init__(self, in_channels: int, out_channels: int, n_layers: int, kernel_size: int = 15, use_cca: bool = False):
         super().__init__()
 
         layers = []
@@ -43,10 +44,13 @@ class ChannelAdaptor(nn.Module):
             layers.append(SeparableBlock(current, next_ch, kernel_size=kernel_size, dilation=dilation))
             current = next_ch
 
+        
         self.model = nn.Sequential(*layers)
+        self.cca = CCA_Module(embed_dim=out_channels) if use_cca else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        x = self.model(x)
+        return self.cca(x)
 
 
 if __name__ == "__main__":
@@ -56,7 +60,8 @@ if __name__ == "__main__":
     in_channels = x.shape[1]
     out_channels = 128
     n_layers = 4
-    adaptor = ChannelAdaptor(in_channels, out_channels, n_layers).to(device)
+    use_cca = False
+    adaptor = ChannelAdaptor(in_channels, out_channels, n_layers, use_cca=use_cca).to(device)
     y = adaptor(x)
     print(y.shape)
     assert y.shape == (B, out_channels, T)

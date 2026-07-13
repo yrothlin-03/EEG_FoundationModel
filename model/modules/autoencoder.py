@@ -13,6 +13,7 @@ class AutoEncoder(nn.Module):
         ch=64,
         ch_mult=[1, 2, 4],
         n_blocks=2,
+        block_type="mamba",
         dropout=0.0,
         mode="kl",
         num_embeddings=512,
@@ -32,6 +33,7 @@ class AutoEncoder(nn.Module):
             ch_mult=ch_mult,
             dropout=dropout,
             n_blocks=n_blocks,
+            block_type=block_type,
         )
 
         self.posterior = Posterior(
@@ -50,6 +52,7 @@ class AutoEncoder(nn.Module):
             ch_mult=ch_mult,
             dropout=dropout,
             n_blocks=n_blocks,
+            block_type=block_type,
         )
 
         self.apply(self._init_weights)

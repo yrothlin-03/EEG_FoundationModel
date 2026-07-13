@@ -1,13 +1,15 @@
 __pycache__/
 .vscode/
 
-# PyTorch checkpoints / weights
+logs/
+
 *.pt
 
-# LaTeX build artifacts (but keep the PDFs)
+*.err
+
 *.aux
-*.log
-*.out
+*.logdcp l'
+# *.out
 *.toc
 *.lof
 *.lot

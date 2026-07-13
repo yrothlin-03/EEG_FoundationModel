@@ -1,10 +1,11 @@
-checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/z_64/pretraining_best.pt
+# checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/without_augmentation/pretraining_best.pt
+checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/contrastive/tests/contrastive_best.pt
 dataset: BCI2A
 
 training:
   out_dir: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/downstream/tests
   task: classification
-  head: linear  # linear, conv, eegvae
+  head: eegvae  # linear, conv, eegvae
   freeze_backbone: true
   freeze_channel_adaptor: false
   num_epochs: 50
@@ -20,8 +21,8 @@ training:
   grad_clip: 1.0
   use_amp: false
   log_step: 50
-  max_step_train: null
-  max_step_val: null
+  max_step_train: 300
+  max_step_val: 100
   max_step_test: null
 
   loss: cross_entropy
@@ -39,7 +40,7 @@ heads:
     hidden: 256
     kernel_size: 3
     n_layers: 2
-    dropout: 0.0
+    dropout: 0.2
     out_len: 4
 
   eegvae:

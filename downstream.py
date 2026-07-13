@@ -10,6 +10,8 @@ def build_model(model_config, num_classes, downstream_config, device):
     training = downstream_config["training"]
     head_type = training.get("head", "linear")
     head_config = downstream_config.get("heads", {}).get(head_type, {})
+    channel_mode = downstream_config["data"]["channel_mode"]
+    input_channels = None if channel_mode == "mapped" else downstream_config["dataset_cfg"].get("num_channels")
     model = DownstreamModel(
         backbone_config=model_config["model"],
         num_classes=num_classes,
@@ -17,6 +19,7 @@ def build_model(model_config, num_classes, downstream_config, device):
         freeze_channel_adaptor=training.get("freeze_channel_adaptor", True),
         probe=head_type,
         probe_config=head_config,
+        input_channels=input_channels,
     ).to(device)
     model.load_weights(downstream_config["checkpoints_path"], map_location=device)
     model.print_summary()

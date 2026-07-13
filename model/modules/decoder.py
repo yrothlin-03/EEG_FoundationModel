@@ -1,8 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
-from .mamba_blocks import MambaBlock
+from .blocks import build_block
 from .utils import Norm, UpSample
-
 
 
 
@@ -14,6 +13,7 @@ class Decoder(nn.Module):
         ch_mult=[1, 2, 4],
         dropout=0.0,
         n_blocks=2,
+        block_type="mamba",
     ):
         super().__init__()
 
@@ -23,19 +23,16 @@ class Decoder(nn.Module):
         in_ch_mult = (1,) + tuple(ch_mult)
         block_in = ch * ch_mult[-1]
 
-        # entrée : latent -> canaux du goulot
         self.conv_in = nn.Conv1d(z_channels, block_in, kernel_size=3, padding=1)
 
-        # goulot
-        self.mid = MambaBlock(block_in, block_in, dropout=dropout)
+        self.mid = build_block(block_type, block_in, block_in, dropout=dropout)
 
-        # niveaux montants (miroir de l'encodeur)
         self.up = nn.ModuleList()
         for i in reversed(range(self.num_stages)):
             block = nn.ModuleList()
             block_out = ch * in_ch_mult[i]
             for _ in range(self.n_blocks):
-                block.append(MambaBlock(block_in, block_out, dropout=dropout))
+                block.append(build_block(block_type, block_in, block_out, dropout=dropout))
                 block_in = block_out
 
             stage = nn.Module()
@@ -44,7 +41,6 @@ class Decoder(nn.Module):
                 stage.upsample = UpSample(block_in)
             self.up.insert(0, stage)
 
-        # sortie
         self.norm = Norm(block_in)
         self.conv_out = nn.Conv1d(block_in, out_channels, kernel_size=3, padding=1)
 

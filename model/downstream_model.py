@@ -17,11 +17,23 @@ def build_probe(probe, num_classes, z_channels, probe_config):
 
 class DownstreamModel(nn.Module):
     def __init__(self, backbone_config, num_classes, freeze_backbone=True,
-                 freeze_channel_adaptor=True, probe="linear", probe_config=None):
+                 freeze_channel_adaptor=True, probe="linear", probe_config=None,
+                 input_channels=None, drop_decoder=True):
         super().__init__()
+        backbone_config = dict(backbone_config)
+        self.pretrained_in_channels = backbone_config["in_channels"]
+        if input_channels is not None and input_channels != self.pretrained_in_channels:
+            backbone_config["in_channels"] = input_channels
+            backbone_config["out_channels"] = (
+                backbone_config.get("out_channels") or self.pretrained_in_channels
+            )
         backbone = EEGVAE(**backbone_config)
         self.channel_adaptor = backbone.channel_adaptor
         self.autoencoder = backbone.autoencoder
+        self.has_decoder = hasattr(self.autoencoder, "decoder")
+        if drop_decoder and self.has_decoder:
+            del self.autoencoder.decoder
+            self.has_decoder = False
         self.freeze_backbone = freeze_backbone
         self.freeze_channel_adaptor = freeze_channel_adaptor
 
@@ -69,10 +81,20 @@ class DownstreamModel(nn.Module):
                       if k.startswith("channel_adaptor.")}
         autoenc_sd = {k[len("autoencoder."):]: v for k, v in state_dict.items()
                       if k.startswith("autoencoder.")}
-        self.channel_adaptor.load_state_dict(adaptor_sd, strict=strict)
+        if not self.has_decoder:
+            autoenc_sd = {k: v for k, v in autoenc_sd.items() if not k.startswith("decoder.")}
+        current = self.channel_adaptor.state_dict()
+        skipped = [k for k, v in adaptor_sd.items()
+                   if k not in current or current[k].shape != v.shape]
+        for k in skipped:
+            adaptor_sd.pop(k)
+        self.channel_adaptor.load_state_dict(adaptor_sd, strict=strict and not skipped)
         self.autoencoder.load_state_dict(autoenc_sd, strict=strict)
         print(f"loaded backbone from {checkpoint_path} | "
               f"adaptor: {len(adaptor_sd)} | autoencoder: {len(autoenc_sd)} tensors")
+        if skipped:
+            print(f"  reinitialized adaptor input stem "
+                  f"(pretrained in_channels={self.pretrained_in_channels}): {skipped}")
 
     def extract_features(self, x):
         return self.probe.features(self.encode(x))
