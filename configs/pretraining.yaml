@@ -1,35 +1,16 @@
 
-data:
-  dataset_path: /projects/EEG-foundation-model/RECH202/tests_2/TUEG/tueg.lmdb
-  batch_size: 32
-  split_ratio: [0.9, 0.05, 0.0]
-  num_workers: 4
-  pin_memory: true
-  persistent_workers: false
-  seed: 42
-  channel_mode: "mapped"
-  drop_last: true
-
-  augment:
-    enabled: true
-    p: 0.5
-    time_shift_ratio: 0.1
-    amplitude_range: [0.8, 1.2]
-    max_channel_dropout: 2
-    noise_std: 0.01
-    time_mask_ratio: [0.05, 0.10]
-
-
-
 model:
-  checkpoint_path: null
-  
+  checkpoint_path: null  
+
+
 
 training:
   out_dir: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/tests
-  num_epochs: 3
-  warmup_epochs: null
+  num_epochs: 5
+  warmup_epochs: 5
   adv_start_epoch: null
+  adv_warmup_epochs: null
+  disc_loss_floor: 0.1
   grad_clip: 1.0
   use_amp: True
   lr: 0.0003
@@ -38,22 +19,25 @@ training:
   disc_weight_decay: 0.0
   discriminator_update_freq: 1
   generator_update_freq: 1
-  max_train_step: 300
-  max_val_step: 100
+  max_train_step: 100
+  max_val_step: 50
 
   plot_recon_every: 1
   log_step: 50
 
   recon_loss_weight: 1.0
   kl_loss_weight: 1.0e-6
-  adv_loss_weight: 0.01
-  stft_loss_weight: 0.0
+  adv_loss_weight: 0.1
+  stft_loss_weight: 0.1
   sizes: [64, 128, 256, 512]
 
   masking:
-    enabled: false
-    patch_size: 32
-    mask_ratio: 0.5
+    enabled: true
+    patch_size: 200
+    mask_ratio: 0.3
+    masked_loss_weight: 0.5
+    visible_loss_weight: 0.5
+
 
 
 

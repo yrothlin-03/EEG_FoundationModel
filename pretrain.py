@@ -1,7 +1,7 @@
 import torch
 
 from utils import PretrainingTrainer, parse_config
-from eeg_preprocessing.loaders import get_pretraining_loader
+from eeg_preprocessing.loaders import build_pretraining_loaders, EEGAugment
 from model import EEGVAE, Discriminator
 
 
@@ -16,9 +16,10 @@ def build_discriminator(disc_config):
 def main(model_config, pretraining_config):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    aug = pretraining_config["data"]["augment"]
-    train_loader, val_loader = get_pretraining_loader(
-        lmdb_paths=pretraining_config["data"]["dataset_path"],
+    augment_enabled = pretraining_config["data"]["augment"]
+    augmenter = EEGAugment() if augment_enabled else None
+    train_loader, val_loader, _ = build_pretraining_loaders(
+        datasets=pretraining_config["data"]["datasets"],
         batch_size=pretraining_config["data"]["batch_size"],
         split_ratio=pretraining_config["data"]["split_ratio"],
         num_workers=pretraining_config["data"]["num_workers"],
@@ -26,10 +27,9 @@ def main(model_config, pretraining_config):
         persistent_workers=pretraining_config["data"]["persistent_workers"],
         seed=pretraining_config["data"]["seed"],
         channel_mode=pretraining_config["data"]["channel_mode"],
-        drop_last=pretraining_config["data"]["drop_last"],
-        augment_train=aug["enabled"],
-        augment_config=aug,
-        scale_factor=100000,
+        augment=augment_enabled,
+        augmenter=augmenter,
+        scale_factor=pretraining_config["data"]["scale_factor"]
     )
 
     model = build_model(model_config["model"]).to(device)

@@ -40,3 +40,27 @@ class SupConLoss(nn.Module):
         mean_log_prob_pos = (mask * log_prob).sum(dim=1) / pos.clamp(min=1)
         loss = -mean_log_prob_pos[pos > 0]
         return loss.mean() if loss.numel() > 0 else logits.sum() * 0.0
+
+
+
+
+class SimCLRLoss(nn.Module):
+    def __init__(self, temperature=0.5):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, z_i, z_j):
+        batch_size = z_i.size(0)
+
+        z_i = F.normalize(z_i, dim=-1)
+        z_j = F.normalize(z_j, dim=-1)
+        z = torch.cat([z_i, z_j], dim=0)
+
+        logits = z @ z.t() / self.temperature
+        logits.fill_diagonal_(float("-inf"))
+
+        targets = torch.arange(batch_size, device=z.device)
+        targets = torch.cat([targets + batch_size, targets], dim=0)
+
+        return F.cross_entropy(logits, targets)
+

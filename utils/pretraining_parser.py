@@ -46,7 +46,7 @@ def _config_path_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--model_config", type=str, default="configs/model.yaml")
     parser.add_argument("--pretraining_config", type=str, default="configs/pretraining.yaml")
-    parser.add_argument("--data_config", type=str, default="configs/data.yaml")
+    parser.add_argument("--data_config", type=str, default="configs/pretraining_data.yaml")
     return parser
 
 

@@ -28,9 +28,8 @@ def build_model(model_config, num_classes, downstream_config, device):
 
 def build_loaders_from_config(downstream_config):
     data = downstream_config["data"]
-    dataset_cfg = downstream_config["dataset_cfg"]
     train_loader, val_loader, test_loader = build_loaders(
-        lmdb_path=dataset_cfg["dataset_path"],
+        dataset=downstream_config["dataset"],
         split_ratio=data["split_ratio"],
         batch_size=data["batch_size"],
         seed=data["seed"],

@@ -3,8 +3,7 @@ import torch
 from model import ContrastiveModel
 from utils import ContrastiveTrainer, CLIPEmbedder
 from utils.contrastive_parser import parse_config
-from eeg_preprocessing.loaders.teeg_dataset import build_contrastive_loader
-from eeg_preprocessing.loaders.multi_dataset import get_pretraining_loader
+from eeg_preprocessing.loaders import build_contrastive_loader
 
 
 def build_clip_embedder(contrastive_config, device):
@@ -37,10 +36,8 @@ def build_model(model_config, contrastive_config, device):
 
 def build_infonce_loaders(contrastive_config, clip_embedder):
     data = contrastive_config["data"]
-    dataset_cfg = contrastive_config["dataset_cfg"]
     loader_cfg = {
-        "lmdb_path": dataset_cfg["dataset_path"],
-        "img_root": dataset_cfg["img_root"],
+        "dataset_name": contrastive_config["dataset"],
         "transform": clip_embedder.preprocess,
         "return_meta": False,
         "split_ratio": data["split_ratio"],
@@ -56,25 +53,14 @@ def build_infonce_loaders(contrastive_config, clip_embedder):
 
 
 def build_supcon_loaders(contrastive_config):
-    data = contrastive_config["data"]
-    datasets_cfg = contrastive_config["datasets_cfg"]
-    names = contrastive_config["supcon_datasets"]
-    lmdb_paths = [datasets_cfg[n]["dataset_path"] for n in names]
-    print(f"supcon datasets ({len(names)}): {names}")
-
-    train_loader, val_loader = get_pretraining_loader(
-        lmdb_paths=lmdb_paths,
-        split_ratio=data["split_ratio"],
-        batch_size=data["batch_size"],
-        seed=data["seed"],
-        num_workers=data["num_workers"],
-        pin_memory=data["pin_memory"],
-        persistent_workers=data["persistent_workers"],
-        channel_mode=data["channel_mode"],
-        scale_factor=1.0,
-        return_labels=True,
+    # TODO: the loaders refactor removed the labelled multi-dataset loader
+    # (old multi_dataset.get_pretraining_loader with return_labels=True).
+    # build_pretraining_loaders yields only (augmented, target) with no labels,
+    # so SupCon has no working loader for now.
+    raise NotImplementedError(
+        "SupCon pretraining is not supported: the loaders pipeline no longer "
+        "exposes a label-returning multi-dataset loader."
     )
-    return {"train": train_loader, "val": val_loader, "test": None}
 
 
 def build_loaders_from_config(contrastive_config, clip_embedder):

@@ -67,6 +67,8 @@ class PretrainingLoss(nn.Module):
         stft_weight=1.0,
         stft_sizes=(32, 128, 384),
         sample_rate=200,
+        masked_loss_weight=1.0,
+        visible_loss_weight=0.0,
     ):
         super().__init__()
         self.rec_weight = rec_weight
@@ -74,9 +76,16 @@ class PretrainingLoss(nn.Module):
         self.stft_weight = stft_weight
         self.stft_sizes = tuple(stft_sizes)
         self.sample_rate = sample_rate
+        self.masked_loss_weight = masked_loss_weight
+        self.visible_loss_weight = visible_loss_weight
 
     def forward(self, pred, target, posterior, mask=None):
-        rec = reconstruction_loss(pred, target)
+        if mask is not None:
+            rec_masked = masked_reconstruction_loss(pred, target, mask)
+            rec_visible = masked_reconstruction_loss(pred, target, 1.0 - mask)
+            rec = self.masked_loss_weight * rec_masked + self.visible_loss_weight * rec_visible
+        else:
+            rec = reconstruction_loss(pred, target)
         kl = vae_loss(posterior)
         stft = stft_loss(pred, target, sizes=self.stft_sizes) if self.stft_weight > 0 else pred.new_zeros(())
 
@@ -93,8 +102,8 @@ class PretrainingLoss(nn.Module):
             "stft_loss": stft.detach(),
         }
         if mask is not None:
-            logs["rec_loss_masked"] = masked_reconstruction_loss(pred, target, mask).detach()
-            logs["rec_loss_visible"] = masked_reconstruction_loss(pred, target, 1.0 - mask).detach()
+            logs["rec_loss_masked"] = rec_masked.detach()
+            logs["rec_loss_visible"] = rec_visible.detach()
         if hasattr(posterior, "perplexity"):
             logs["perplexity"] = posterior.perplexity.detach()
         return total, logs

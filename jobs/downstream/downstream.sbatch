@@ -27,7 +27,7 @@ mkdir -p logs/downstream
 
 python downstream.py \
     --model_config configs/model.yaml \
-    --data_config configs/data.yaml \
+    --data_config configs/downstream_data.yaml \
     --downstream_config configs/downstream.yaml \
     --dataset BCI2A \
     --training.num_epochs 50 \

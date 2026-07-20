@@ -45,7 +45,7 @@ def _set_nested(config, dotted, value):
 def _config_path_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--model_config", type=str, default="configs/model.yaml")
-    parser.add_argument("--data_config", type=str, default="configs/data.yaml")
+    parser.add_argument("--data_config", type=str, default="configs/downstream_data.yaml")
     parser.add_argument("--downstream_config", type=str, default="configs/downstream.yaml")
     parser.add_argument("--dataset", type=str, default=None)
     return parser

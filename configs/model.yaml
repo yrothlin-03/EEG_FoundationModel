@@ -3,13 +3,13 @@ model:
   out_channels: 19
   channel_adaptor: true
   adaptor_layers: 4
-  use_cca: false
+  use_cca: false 
   z_channels: 256
   ch: 64
   ch_mult: [1, 2, 4, 8]
   n_blocks: 2
   block_type: "mamba"  # mamba, resnet
-  dropout: 0.0
+  dropout: 0.1
   mode: "vq"
   num_embeddings: 256
   n_quantizers: 8

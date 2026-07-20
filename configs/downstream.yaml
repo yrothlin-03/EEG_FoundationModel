@@ -1,5 +1,5 @@
 # checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/without_augmentation/pretraining_best.pt
-checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/contrastive/tests/contrastive_best.pt
+checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/mamba_block_wo_adv/pretraining_best.pt
 dataset: BCI2A
 
 training:

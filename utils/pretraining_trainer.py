@@ -58,6 +58,9 @@ class Trainer:
         self.num_epochs = get("num_epochs", 20)
         self.warmup_epochs = get("warmup_epochs", 0)
         self.adv_start_epoch = t.get("adv_start_epoch")
+        self.adv_warmup_epochs = get("adv_warmup_epochs", 5)
+        self.disc_loss_floor = get("disc_loss_floor", 0.1)
+        self._last_disc_loss = None
         self.grad_clip = get("grad_clip", 1.0)
         self.use_amp = get("use_amp", False)
         self.lr = get("lr", 3e-4)
@@ -81,6 +84,8 @@ class Trainer:
         self.mask_enabled = mask_cfg.get("enabled", False)
         self.mask_patch_size = mask_cfg.get("patch_size", 32)
         self.mask_ratio = mask_cfg.get("mask_ratio", 0.5)
+        self.masked_loss_weight = mask_cfg.get("masked_loss_weight", 1.0)
+        self.visible_loss_weight = mask_cfg.get("visible_loss_weight", 0.0)
 
         self.criterion = self._build_criterion()
         self.opt_g = self._build_optimizer(self.model, lr=self.lr, weight_decay=self.weight_decay)
@@ -156,6 +161,8 @@ class Trainer:
             kl_weight=self.kl_weight,
             stft_weight=self.stft_weight,
             stft_sizes=self.stft_sizes,
+            masked_loss_weight=self.masked_loss_weight,
+            visible_loss_weight=self.visible_loss_weight,
         )
 
     def _apply_masking(self, x_in):
@@ -165,6 +172,12 @@ class Trainer:
 
     def _use_gan(self):
         return self.adv_start_epoch is not None and self.epoch >= self.adv_start_epoch
+
+    def _adv_weight_at(self, step, n_steps):
+        warmup_steps = max(1, self.adv_warmup_epochs * n_steps)
+        elapsed = (self.epoch - self.adv_start_epoch) * n_steps + step
+        ramp = min(1.0, max(0.0, elapsed / warmup_steps))
+        return self.adv_weight * ramp
 
     def _prepare_batch(self, batch):
         x_in, x_tgt = batch[0], batch[1]
@@ -195,12 +208,15 @@ class Trainer:
     @torch.no_grad()
     def _plot_recon_figure(self, epoch):
         self.model.eval()
-        k=50
+        k = min(50, len(self.val_loader) - 1)
         batch = next(islice(self.val_loader, k, k + 1))
         x_in, x_tgt = self._prepare_batch(batch)
+        x_in, mask = self._apply_masking(x_in)
         rec = self.model.reconstruct(x_in)
-        tgt = x_tgt[10].cpu().numpy()
-        rec = rec[10].float().cpu().numpy()
+        sample_idx = min(10, x_tgt.shape[0] - 1)
+        tgt = x_tgt[sample_idx].cpu().numpy()
+        rec = rec[sample_idx].float().cpu().numpy()
+        sample_mask = mask[sample_idx].cpu().numpy() if mask is not None else None
 
         C = tgt.shape[0]
         names = TARGET_CHS[:C] if C <= len(TARGET_CHS) else [f"ch{i}" for i in range(C)]
@@ -210,6 +226,8 @@ class Trainer:
         if n == 1:
             axes = [axes]
         for i in range(n):
+            if sample_mask is not None:
+                self._shade_masked_spans(axes[i], sample_mask)
             axes[i].plot(tgt[i], color="#222222", lw=0.8, label="original")
             axes[i].plot(rec[i], color="#d62728", lw=0.8, label="reconstruction")
             axes[i].set_title(names[i], fontsize=10)
@@ -220,6 +238,16 @@ class Trainer:
         fig.tight_layout()
         fig.savefig(os.path.join(self.out_dir, f"recon_epoch{epoch}.png"), dpi=120)
         plt.close(fig)
+
+    @staticmethod
+    def _shade_masked_spans(ax, sample_mask, color="#ffd54f", alpha=0.3):
+        masked = sample_mask > 0.5
+        if not masked.any():
+            return
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], masked.astype(int), [0]))))
+        starts, ends = edges[0::2], edges[1::2]
+        for start, end in zip(starts, ends):
+            ax.axvspan(start, end, color=color, alpha=alpha, lw=0, zorder=0)
 
     def _plot_loss_curves(self):
         os.makedirs(self.out_dir, exist_ok=True)
@@ -255,9 +283,11 @@ class Trainer:
                 pred, posterior = self.model(x_in)
                 loss, logs = self.criterion(pred, x_tgt, posterior, mask=mask)
                 if use_gan:
+                    adv_weight = self._adv_weight_at(step, n_steps)
                     adv = generator_loss(self.disc(pred))
-                    loss = loss + self.adv_weight * adv
+                    loss = loss + adv_weight * adv
                     logs["adv_loss"] = adv.detach()
+                    logs["adv_weight"] = loss.new_tensor(adv_weight)
 
             if step % self.gen_update_freq == 0:
                 self.opt_g.zero_grad(set_to_none=True)
@@ -266,7 +296,11 @@ class Trainer:
                 self.opt_g.step()
                 self.scheduler.step()
 
-            if use_gan and step % self.disc_update_freq == 0:
+            disc_frozen = (
+                self._last_disc_loss is not None
+                and self._last_disc_loss < self.disc_loss_floor
+            )
+            if use_gan and not disc_frozen and step % self.disc_update_freq == 0:
                 with self._autocast():
                     logits_real = self.disc(x_tgt)
                     logits_fake = self.disc(pred.detach())
@@ -274,7 +308,10 @@ class Trainer:
                 self.opt_d.zero_grad(set_to_none=True)
                 d_loss.backward()
                 self.opt_d.step()
+                self._last_disc_loss = d_loss.item()
                 logs["disc_loss"] = d_loss.detach()
+            elif use_gan:
+                logs["disc_loss"] = loss.new_tensor(self._last_disc_loss or 0.0)
 
             for k, v in logs.items():
                 running[k] = running.get(k, 0.0) + v.item()
