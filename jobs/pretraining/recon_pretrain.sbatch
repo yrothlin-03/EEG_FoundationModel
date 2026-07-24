@@ -6,7 +6,7 @@
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
-#SBATCH --job-name=mamba_block_wo_adv
+#SBATCH --job-name=w_preprocessing
 #SBATCH --output=/home/infres/yrothlin-24/EEG_Foundation_Model/logs/pretraining/%x_%j.out
 #SBATCH --error=/home/infres/yrothlin-24/EEG_Foundation_Model/logs/pretraining/%x_%j.err
 
@@ -30,7 +30,7 @@ python pretrain.py \
     --pretraining_config configs/pretraining.yaml \
     --data_config configs/pretraining_data.yaml \
     --training.num_epochs 20 \
-    --training.out_dir /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/mamba_block_wo_adv \
+    --training.out_dir /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/w_preprocessing \
     --training.max_train_step 2000 \
     --training.max_val_step 200 \
     --model.block_type mamba 

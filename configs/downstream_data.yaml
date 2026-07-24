@@ -7,7 +7,7 @@ data:
   seed: 100
   channel_mode: "mapped"
   return_ch_names: false
-  scale_factor: 100000
+  scale_factor: 10000.0
   datasets: "BCI2A"
 
   
@@ -34,7 +34,7 @@ CHISCO:
   n_classes: null
 
 FACED:
-  time_length: 30
+  time_length: 10
   n_channels: 30
   n_classes: 9
 
@@ -54,8 +54,8 @@ PHYSIONETMI:
   n_classes: 4
 
 SEEDV:
-  time_length: 10
-  n_channels: 66
+  time_length: 1
+  n_channels: 58
   n_classes: 5
 
 SHUMI:

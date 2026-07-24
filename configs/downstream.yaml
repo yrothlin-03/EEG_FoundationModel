@@ -1,11 +1,11 @@
 # checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/without_augmentation/pretraining_best.pt
-checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/mamba_block_wo_adv/pretraining_best.pt
-dataset: BCI2A
+checkpoints_path: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/w_preprocessing/pretraining_best.pt
+dataset: FACED
 
 training:
   out_dir: /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/downstream/tests
   task: classification
-  head: eegvae  # linear, conv, eegvae
+  head: conv  # linear, conv, eegvae
   freeze_backbone: true
   freeze_channel_adaptor: false
   num_epochs: 50

@@ -11,7 +11,7 @@ def build_model(model_config, num_classes, downstream_config, device):
     head_type = training.get("head", "linear")
     head_config = downstream_config.get("heads", {}).get(head_type, {})
     channel_mode = downstream_config["data"]["channel_mode"]
-    input_channels = None if channel_mode == "mapped" else downstream_config["dataset_cfg"].get("num_channels")
+    input_channels = None if channel_mode == "mapped" else downstream_config["dataset_cfg"].get("n_channels")
     model = DownstreamModel(
         backbone_config=model_config["model"],
         num_classes=num_classes,

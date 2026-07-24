@@ -7,7 +7,7 @@ data:
   seed: 100
   channel_mode: "mapped"
   return_ch_names: false
-  scale_factor: 100000
+  scale_factor: 1.0
   augment: True
   datasets: ["TUEG"]
 
