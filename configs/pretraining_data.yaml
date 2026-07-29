@@ -1,5 +1,5 @@
 data:
-  batch_size: 64 
+  batch_size: 32
   split_ratio: [0.8, 0.1, 0.1]
   num_workers: 4
   pin_memory: true
@@ -8,8 +8,9 @@ data:
   channel_mode: "mapped"
   return_ch_names: false
   scale_factor: 1.0
-  augment: True
+  augment: False
   datasets: ["TUEG"]
+  variant: "preprocessed"
 
   
 

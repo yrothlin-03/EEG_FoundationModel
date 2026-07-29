@@ -1,0 +1,23 @@
+training:
+  out_dir: outputs/debug
+  num_epochs: 200
+  lr: 3.0e-4
+  warmup_frac: 0.02
+  use_amp: false
+  channel_dropout: 0.0
+  detach_target_until: null
+  adaptive_weights: false
+  loss_weights:
+    jepa: 1.0
+    spectral: 0.5
+    physio: 0.1
+    sigreg: 0.0
+  masking:
+    probs: [1.0, 0.0, 0.0, 0.0]
+    ratio_start: 0.5
+    ratio_end: 0.5
+    ramp_frac: 1.0
+  log_step: 10
+  plot_every: 20
+  max_train_step: 5
+  max_val_step: 2

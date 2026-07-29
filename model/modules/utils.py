@@ -30,72 +30,83 @@ class Norm(nn.Module):
         return x
 
 
-
-
-
-
-
-
-class UpSampleBis(nn.Module):
-    def __init__(self, in_channels):
+class DropPath(nn.Module):
+    def __init__(self, p=0.0):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.ConvTranspose1d(
-                in_channels=in_channels,
-                out_channels=in_channels,
-                kernel_size=2,
-                stride=2,
-            ),
-            Norm(in_channels),
-            nn.SiLU(inplace=True)
-        )
+        self.p = p
 
     def forward(self, x):
-        B,C,T = x.shape
-        if T % 2 != 0:
-            raise ValueError(f"Input tensor length {T} is not divisible by 2 for UpSample.")
-        return self.block(x)
+        if self.p == 0.0 or not self.training:
+            return x
+        keep = 1.0 - self.p
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = x.new_empty(shape).bernoulli_(keep)
+        return x * mask / keep
 
 
-class UpSample(nn.Module):
-    def __init__(self, in_channels):
+class SwiGLU(nn.Module):
+    def __init__(self, dim, mult=8 / 3, dropout=0.0):
         super().__init__()
-        self.conv = nn.Conv1d(
-            in_channels=in_channels,
-            out_channels=in_channels,
-            kernel_size=3,
-            stride=1,
-            padding=1
-        )
-        self.norm = Norm(in_channels)
-        self.act = nn.SiLU(inplace=True)
+        hidden = int(dim * mult)
+        hidden = (hidden + 63) // 64 * 64
+        self.w12 = nn.Linear(dim, 2 * hidden, bias=False)
+        self.w3 = nn.Linear(hidden, dim, bias=False)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=2, mode='linear', align_corners=False)
-        x = self.conv(x)
-        x = self.norm(x)
-        x = self.act(x)
-        return x
+        a, b = self.w12(x).chunk(2, dim=-1)
+        return self.drop(self.w3(F.silu(a) * b))
 
+
+class ConformerConv(nn.Module):
+    def __init__(self, dim, kernel_size=15, expand=2, dropout=0.0):
+        super().__init__()
+        assert kernel_size % 2 == 1
+        inner = dim * expand
+        self.pw1 = nn.Linear(dim, 2 * inner, bias=False)
+        self.dw = nn.Conv1d(inner, inner, kernel_size,
+                            padding=kernel_size // 2, groups=inner, bias=False)
+        self.norm = nn.GroupNorm(1, inner)
+        self.pw2 = nn.Linear(inner, dim, bias=False)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B, C, N, D = x.shape
+        a, b = self.pw1(x).chunk(2, dim=-1)
+        h = (a * torch.sigmoid(b)).reshape(B * C, N, -1).transpose(1, 2)
+        h = F.silu(self.norm(self.dw(h)))
+        h = h.transpose(1, 2).reshape(B, C, N, -1)
+        return self.drop(self.pw2(h))
+
+
+
+class SpatialConv(nn.Module):
+    def __init__(self, C, dim, hidden_mult=1):
+        super().__init__()
+        self.norm = nn.RMSNorm(dim)
+        self.mix = nn.Conv2d(C, C * hidden_mult, 1, bias=False)
+        self.act = nn.SiLU()
+        self.out = nn.Conv2d(C * hidden_mult, C, 1, bias=False)
+        nn.init.zeros_(self.out.weight)
+
+    def forward(self, x, key_padding_mask=None):
+        h = self.norm(x)
+        if key_padding_mask is not None:
+            h = h.masked_fill(key_padding_mask[:, :, None, None], 0.0)
+        return self.out(self.act(self.mix(h)))
+
+    
 
 
 class DownSample(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, dim_in, dim_out, factor=2):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(
-                in_channels=in_channels,
-                out_channels=in_channels,
-                kernel_size=3,
-                stride=2,
-                padding=1
-            ),
-            Norm(in_channels),
-            nn.SiLU(inplace=True)
-        )
+        self.factor = factor
+        self.norm = nn.RMSNorm(dim_in * factor)
+        self.proj = nn.Linear(dim_in * factor, dim_out, bias=False)
 
     def forward(self, x):
-        B,C,T = x.shape
-        if T%2 != 0:
-            x = F.pad(x, (0, 1), mode="replicate")
-        return self.block(x)
+        B, C, N, D = x.shape
+        N2 = (N // self.factor) * self.factor
+        x = x[:, :, :N2].reshape(B, C, N2 // self.factor, D * self.factor)
+        return self.proj(self.norm(x))

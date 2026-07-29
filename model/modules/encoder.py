@@ -1,56 +1,149 @@
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from .blocks import build_block
-from .utils import Norm, DownSample
+
+from .utils import ConformerConv, SwiGLU, DropPath, SpatialConv, DownSample
+from .beamformer_attention import BeamformerAttention, DistanceBias
+from .mamba_layer import BiMamba2Temporal
+from .stem import Stem
+from .bottleneck import Bottleneck
+
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, n_channels, dim, n_heads, spatial="beamformer",
+                 drop_path=0.15, ls_init=1e-4, dropout=0.0):
+        super().__init__()
+        assert spatial in ("conv", "beamformer")
+        self.spatial_mode = spatial
+
+        self.norm_s = nn.RMSNorm(dim)
+        if spatial == "beamformer":
+            self.attn = BeamformerAttention(dim, n_heads, dropout=dropout)
+        self.spatial_conv = SpatialConv(n_channels, dim)
+
+        self.norm_t = nn.RMSNorm(dim)
+        self.temporal = BiMamba2Temporal(dim, d_state=128, headdim=64,
+                                         dropout=dropout)
+
+        self.norm_c = nn.RMSNorm(dim)
+        self.conv_mod = ConformerConv(dim, kernel_size=15, dropout=dropout)
+
+        self.norm_f = nn.RMSNorm(dim)
+        self.ffn = SwiGLU(dim, dropout=dropout)
+
+        self.ls_s = nn.Parameter(ls_init * torch.ones(dim))
+        self.ls_t = nn.Parameter(ls_init * torch.ones(dim))
+        self.ls_c = nn.Parameter(ls_init * torch.ones(dim))
+        self.ls_f = nn.Parameter(ls_init * torch.ones(dim))
+
+        self.dp = DropPath(drop_path)
+        self.last_attn = None
+
+    def forward(self, x, dist_bias=None, kpm=None):
+        h = self.norm_s(x)
+        s = self.spatial_conv(h, kpm)
+        if self.spatial_mode == "beamformer":
+            a, attn = self.attn(h, dist_bias, kpm)
+            self.last_attn = attn.detach() if not self.training else None
+            s = s + a
+        x = x + self.dp(self.ls_s * s)
+
+        x = x + self.dp(self.ls_t * self.temporal(self.norm_t(x)))
+        x = x + self.dp(self.ls_c * self.conv_mod(self.norm_c(x)))
+        return x + self.dp(self.ls_f * self.ffn(self.norm_f(x)))
+
+
+
 
 
 class Encoder(nn.Module):
-    def __init__(self,
-        in_channels,
-        z_channels,
-        ch=64,
-        ch_mult=[1, 2, 4],
+    def __init__(
+        self,
+        pos,
+        dims=(128, 192, 256, 384),
+        depths=(2, 2, 3, 3),
+        spatial=("conv", "conv", "beamformer", "beamformer"),
+        n_heads=8,
+        n_bands=32,
+        kernel_size=65,
+        fs=200,
+        pool=20,
+        z_dim=None,
+        drop_path=0.15,
         dropout=0.0,
-        n_blocks=2,
-        block_type="mamba",
+        n_dist_bins=16,
     ):
         super().__init__()
+        assert len(dims) == len(depths) == len(spatial)
+        C = pos.shape[0]
+        self.n_channels, self.dims, self.pool = C, dims, pool
 
-        self.num_stages = len(ch_mult)
-        self.n_blocks = n_blocks
+        self.stem = Stem(C, dim=dims[0], n_bands=n_bands,
+                         K=kernel_size, fs=fs, pool=pool)
+        self.dist_bias = DistanceBias(pos, n_heads, n_bins=n_dist_bins)
 
-        in_ch_mult = (1,) + tuple(ch_mult)
-        self.down = nn.ModuleList()
+        dpr = torch.linspace(0, drop_path, sum(depths)).tolist()
+        self.stages = nn.ModuleList()
+        self.downs = nn.ModuleList()
 
-        for i in range(self.num_stages):
-            block = nn.ModuleList()
-            block_in = ch * in_ch_mult[i]
-            block_out = ch * in_ch_mult[i + 1]
-            for _ in range(self.n_blocks):
-                block.append(build_block(block_type, block_in, block_out, dropout=dropout))
-                block_in = block_out
-            stage = nn.Module()
-            stage.block = block
-            if i != self.num_stages - 1:
-                stage.downsample = DownSample(block_in)
-            self.down.append(stage)
+        i = 0
+        for lvl, (d, n, sp) in enumerate(zip(dims, depths, spatial)):
+            self.stages.append(nn.ModuleList([
+                EncoderBlock(C, d, n_heads, spatial=sp,
+                             drop_path=dpr[i + j], dropout=dropout)
+                for j in range(n)
+            ]))
+            i += n
+            if lvl < len(dims) - 1:
+                self.downs.append(DownSample(d, dims[lvl + 1]))
 
-        self.mid = build_block(block_type, block_in, block_in, dropout=dropout)
-        self.norm = Norm(block_in)
-        self.conv_out = nn.Conv1d(block_in, z_channels, kernel_size=3, padding=1)
+        self.bottleneck = Bottleneck(dims[-1], n_heads,
+                                     z_dim=z_dim, dropout=dropout)
+        self.apply(self._init)
 
+    @staticmethod
+    def _init(m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
-    def forward(self, x):
-        h = x
+    def forward(self, x, presence=None, return_hidden=False):
+        B, C, T = x.shape
+        assert C == self.n_channels, f"attendu {self.n_channels} canaux, reçu {C}"
+        if presence is None:
+            presence = torch.ones(B, C, dtype=torch.long, device=x.device)
 
-        for i in range(self.num_stages):
-            for block in self.down[i].block:
-                h = block(h)
-            if i != self.num_stages - 1:
-                h = self.down[i].downsample(h)
+        h = self.stem(x, presence)
+        bias = self.dist_bias()
+        kpm = (presence == 0)
 
-        h = self.mid(h)
-        h = self.norm(h)
-        h = F.silu(h)
-        h = self.conv_out(h)
-        return h
+        hidden = []
+        for lvl, stage in enumerate(self.stages):
+            for blk in stage:
+                h = blk(h, bias, kpm)
+            if return_hidden:
+                hidden.append(h)
+            if lvl < len(self.downs):
+                h = self.downs[lvl](h)
+
+        z, z_glob = self.bottleneck(h, kpm)
+        out = {"z": z, "z_glob": z_glob}
+        if return_hidden:
+            out["hidden"] = hidden
+        return out
+
+    def no_weight_decay(self):
+        skip = set()
+        for n, _ in self.named_parameters():
+            if any(k in n for k in ("dist_bias.table", "log_fc", "log_sigma",
+                                    "ls_s", "ls_t", "ls_c", "ls_f",
+                                    "_emb", "query", "norm")):
+                skip.add(n)
+        return skip
+
+    @torch.no_grad()
+    def diagnostics(self):
+        out = {"gabor_hz": self.stem.fb.frequencies().cpu()}
+        out["dist_bias"] = self.dist_bias.table.detach().cpu()
+        return out

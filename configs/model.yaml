@@ -1,23 +1,30 @@
 model:
-  in_channels: 19
-  out_channels: 19
-  channel_adaptor: true
-  adaptor_layers: 4
-  use_cca: false 
-  z_channels: 256
-  ch: 64
-  ch_mult: [1, 2, 4, 8]
-  n_blocks: 2
-  block_type: "mamba"  # mamba, resnet
-  dropout: 0.1
-  mode: "vq"
-  num_embeddings: 256
-  n_quantizers: 8
-  commitment_cost: 0.25
-  decay: 0.99
+  dims: [128, 192, 256, 384]
+  depths: [2, 2, 3, 3]
+  spatial: [conv, conv, beamformer, beamformer]
+  n_heads: 8
 
-discriminator:
-  in_channels: 19
-  ndf: 64
-  n_layers: 3
-  use_actnorm: False
+  n_bands: 32
+  kernel_size: 65
+  fs: 200
+  pool: 20
+  window: 6000
+
+  z_dim: null
+  drop_path: 0.15
+  dropout: 0.0
+  n_dist_bins: 16
+
+  predictor_depth: 2
+  predictor_ratio: 0.5
+
+  n_fft_list: [256, 512, 1024]
+  hop_div: 4
+  f_max: 45.0
+  n_physio_feats: 10
+
+  use_jepa: true
+  use_spectral: true
+  use_physio: true
+  detach_target: true
+  use_ema_target: true

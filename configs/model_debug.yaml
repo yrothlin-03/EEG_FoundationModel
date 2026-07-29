@@ -1,0 +1,14 @@
+model:
+  dims: [64, 96, 128]
+  depths: [1, 1, 1]
+  spatial: [conv, conv, beamformer]
+  n_heads: 4
+  n_bands: 16
+  kernel_size: 33
+  fs: 200
+  pool: 20
+  window: 6000
+  drop_path: 0.0
+  predictor_depth: 1
+  n_fft_list: [256]
+  detach_target: true
