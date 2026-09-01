@@ -1,271 +1,537 @@
 import math
+from typing import Literal, Optional, Union
+
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributed.nn.functional import all_reduce as differentiable_all_reduce
 
 
-class JEPALoss(nn.Module):
-    def __init__(self, beta=1.0, normalize_targets=True):
+
+class AlignmentLoss(nn.Module):
+    def __init__(self, config=None):
         super().__init__()
-        self.beta = beta
-        self.normalize_targets = normalize_targets
 
-    def forward(self, pred, target, mask, valid=None):
-        m = mask
-        if valid is not None:
-            m = m & valid.unsqueeze(-1)
-        m = m.unsqueeze(-1).to(pred.dtype)
-        denom = m.sum()
-        if denom == 0:
-            return pred.sum() * 0.0
-        if self.normalize_targets:
-            target = F.layer_norm(target, (target.shape[-1],))
-            pred = F.layer_norm(pred, (pred.shape[-1],))
-        l = F.smooth_l1_loss(pred, target, beta=self.beta, reduction="none")
-        return (l * m).sum() / denom / pred.shape[-1]
+        config = config or {}
 
-
-class SpectralLoss(nn.Module):
-    def __init__(self, n_fft_list=(256, 512, 1024), hop_div=4, fs=200, f_max=45.0):
-        super().__init__()
-        self.n_fft_list = list(n_fft_list)
-        self.hops = [n // hop_div for n in self.n_fft_list]
-        self.fs = fs
-        self.keep = [int(f_max / (fs / n)) + 1 for n in self.n_fft_list]
-        for i, n in enumerate(self.n_fft_list):
-            self.register_buffer(f"win_{i}", torch.hann_window(n), persistent=False)
-
-    @torch.no_grad()
-    def targets(self, x):
-        B, C, T = x.shape
-        xf = x.reshape(B * C, T)
-        out = []
-        for i, (n_fft, hop, k) in enumerate(zip(self.n_fft_list, self.hops, self.keep)):
-            w = getattr(self, f"win_{i}").to(xf.dtype)
-            S = torch.stft(xf, n_fft=n_fft, hop_length=hop, window=w,
-                           return_complex=True, center=True)
-            mag = S.abs()[:, :k].transpose(1, 2)
-            out.append(torch.log1p(mag).reshape(B, C, mag.shape[1], k))
-        return out
-
-    def forward(self, preds, targets, valid=None):
-        assert len(preds) == len(targets), (
-            f"{len(preds)} resolutions predites contre {len(targets)} cibles : "
-            f"la tete spectrale et la loss n'ont pas le meme n_fft_list"
+        self.detach_center = config.get(
+            "detach_center",
+            False,
         )
-        total = preds[0].sum() * 0.0
-        for p, t in zip(preds, targets):
-            n = min(p.shape[2], t.shape[2])
-            l = (p[:, :, :n] - t[:, :, :n]).abs()
-            if valid is None:
-                total = total + l.mean()
-            else:
-                m = valid[:, :, None, None].to(l.dtype)
-                total = total + (l * m).sum() / (m.sum() * l.shape[-1] * n).clamp(min=1)
-        return total / len(preds)
+        self.feature_reduction = config.get(
+            "feature_reduction",
+            "mean",
+        )
+        self.reduction = config.get(
+            "reduction",
+            "mean",
+        )
+
+    def forward(
+        self,
+        z_global: torch.Tensor,
+        z_local: torch.Tensor,
+    ) -> torch.Tensor:
+        if z_global.ndim != 3:
+            raise ValueError(
+                "z_global must have shape [B, V, D]."
+            )
+
+        if z_local.ndim != 3:
+            raise ValueError(
+                "z_local must have shape [B, L, D]."
+            )
 
 
-class PhysioLoss(nn.Module):
-    BANDS = ((0.5, 4.0), (4.0, 8.0), (8.0, 13.0), (13.0, 30.0), (30.0, 45.0))
+        center = z_global.mean(
+            dim=1,
+            keepdim=True,
+        )
 
-    def __init__(self, fs=200, n_fft=512, n_feats=10, momentum=0.01, beta=1.0):
-        super().__init__()
-        self.fs, self.n_fft, self.beta = fs, n_fft, beta
-        self.momentum = momentum
-        self.register_buffer("win", torch.hann_window(n_fft), persistent=False)
-        self.register_buffer("run_mu", torch.zeros(n_feats))
-        self.register_buffer("run_var", torch.ones(n_feats))
-        self.register_buffer("initialized", torch.zeros(1, dtype=torch.bool))
+        if self.detach_center:
+            center = center.detach()
 
-    @torch.no_grad()
-    def targets(self, x, eps=1e-8):
-        B, C, T = x.shape
-        xf = x.reshape(B * C, T)
-        w = self.win.to(xf.dtype)
-        S = torch.stft(xf, n_fft=self.n_fft, hop_length=self.n_fft // 4,
-                       window=w, return_complex=True, center=True)
-        psd = S.abs().pow(2).mean(-1)
-        freqs = torch.linspace(0, self.fs / 2, psd.shape[1], device=x.device)
+        all_views = torch.cat(
+            [z_global, z_local],
+            dim=1,
+        )
 
-        bp = torch.stack([
-            psd[:, (freqs >= lo) & (freqs < hi)].mean(-1).clamp(min=eps).log()
-            for lo, hi in self.BANDS
-        ], -1)
+        squared_error = (
+            all_views - center
+        ).square()
 
-        fit = (freqs >= 2.0) & (freqs <= 40.0)
-        lf = freqs[fit].clamp(min=eps).log()
-        lp = psd[:, fit].clamp(min=eps).log()
-        lfc = lf - lf.mean()
-        slope = (lfc * (lp - lp.mean(-1, keepdim=True))).sum(-1) / lfc.pow(2).sum()
-        offset = lp.mean(-1)
-
-        d1 = torch.diff(xf, dim=-1)
-        d2 = torch.diff(d1, dim=-1)
-        v0, v1, v2 = xf.var(-1) + eps, d1.var(-1) + eps, d2.var(-1) + eps
-        mob = (v1 / v0).sqrt()
-        comp = (v2 / v1).sqrt() / mob.clamp(min=eps)
-
-        feats = torch.cat([bp, slope[:, None], offset[:, None], v0.log()[:, None],
-                           mob.clamp(min=eps).log()[:, None],
-                           comp.clamp(min=eps).log()[:, None]], -1)
-        return feats.reshape(B, C, -1)
-
-    @torch.no_grad()
-    def _update_stats(self, t, valid):
-        flat = t.reshape(-1, t.shape[-1])
-        if valid is not None:
-            flat = flat[valid.reshape(-1)]
-        if flat.numel() == 0:
-            return
-        mu, var = flat.mean(0), flat.var(0, unbiased=False)
-        if not self.initialized:
-            self.run_mu.copy_(mu)
-            self.run_var.copy_(var)
-            self.initialized.fill_(True)
+        if self.feature_reduction == "mean":
+            per_view_loss = squared_error.mean(dim=-1)
         else:
-            self.run_mu.mul_(1 - self.momentum).add_(self.momentum * mu)
-            self.run_var.mul_(1 - self.momentum).add_(self.momentum * var)
+            per_view_loss = squared_error.sum(dim=-1)
 
-    def forward(self, pred, target, valid=None):
-        if self.training:
-            self._update_stats(target, valid)
-        t = (target - self.run_mu) / self.run_var.clamp(min=1e-4).sqrt()
-        l = F.smooth_l1_loss(pred, t, beta=self.beta, reduction="none")
-        if valid is None:
-            return l.mean()
-        m = valid[:, :, None].to(l.dtype)
-        return (l * m).sum() / (m.sum() * l.shape[-1]).clamp(min=1)
+        if self.reduction == "mean":
+            return per_view_loss.mean()
+
+        if self.reduction == "sum":
+            return per_view_loss.sum()
+
+        return per_view_loss
+
 
 
 class SIGRegLoss(nn.Module):
-    def __init__(self, n_slices=128, n_knots=17, t_max=4.0, max_samples=8192):
+    def __init__(
+        self,
+        num_slices: int = 256,
+        num_integration_points: int = 17,
+        integration_range: tuple[float, float] = (-5.0, 5.0),
+        reduction: Literal["mean", "sum", "none"] = "mean",
+        base_seed: int = 0,
+        sync_ddp: bool = True,
+        force_float32: bool = True,
+        eps: float = 1e-12,
+    ) -> None:
         super().__init__()
-        self.n_slices, self.max_samples = n_slices, max_samples
-        self.register_buffer("t", torch.linspace(-t_max, t_max, n_knots))
-        self.register_buffer("target_cf", (-0.5 * torch.linspace(-t_max, t_max, n_knots).pow(2)).exp())
 
-    def forward(self, z, valid=None):
-        if z.dim() == 4 and valid is not None:
-            z = z[valid]
-        z = z.reshape(-1, z.shape[-1])
-        if z.shape[0] > self.max_samples:
-            idx = torch.randperm(z.shape[0], device=z.device)[:self.max_samples]
-            z = z[idx]
-        if z.shape[0] < 32:
-            return z.sum() * 0.0
+        self.num_slices = num_slices
+        self.reduction = reduction
+        self.base_seed = base_seed
+        self.sync_ddp = sync_ddp
+        self.force_float32 = force_float32
+        self.eps = eps
 
-        N, D = z.shape
-        u = F.normalize(torch.randn(D, self.n_slices, device=z.device, dtype=z.dtype), dim=0)
-        s = (z - z.mean(0, keepdim=True)) @ u
-        s = s / s.std().clamp(min=1e-6)
+        integration_points = torch.linspace(
+            integration_range[0],
+            integration_range[1],
+            num_integration_points,
+            dtype=torch.float32,
+        )
 
-        arg = s.unsqueeze(-1) * self.t
-        re, im = arg.cos().mean(0), arg.sin().mean(0)
-        diff = (re - self.target_cf).pow(2) + im.pow(2)
-        return torch.trapz(diff * self.target_cf, self.t, dim=-1).mean()
+        target_cf = torch.exp(
+            -0.5 * integration_points.square()
+        )
 
+        self.register_buffer(
+            "integration_points",
+            integration_points,
+            persistent=False,
+        )
 
+        self.register_buffer(
+            "target_cf",
+            target_cf,
+            persistent=False,
+        )
+
+    @staticmethod
+    def _is_distributed() -> bool:
+        return (
+            dist.is_available()
+            and dist.is_initialized()
+        )
+
+    def _sample_directions(
+        self,
+        latent_dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        global_step: Optional[Union[int, torch.Tensor]],
+    ) -> torch.Tensor:
+        generator = None
+
+        if global_step is not None:
+            if isinstance(global_step, torch.Tensor):
+                global_step = int(global_step.item())
+            else:
+                global_step = int(global_step)
+
+            generator = torch.Generator(device=device)
+            generator.manual_seed(
+                self.base_seed + global_step
+            )
+
+        elif self.sync_ddp and self._is_distributed():
+            raise ValueError(
+                "global_step is required when sync_ddp=True."
+            )
+
+        directions = torch.randn(
+            latent_dim,
+            self.num_slices,
+            device=device,
+            dtype=dtype,
+            generator=generator,
+        )
+
+        return F.normalize(
+            directions,
+            p=2,
+            dim=0,
+            eps=self.eps,
+        )
+
+    @staticmethod
+    def _distributed_sum(
+        tensor: torch.Tensor,
+    ) -> torch.Tensor:
+
+        return differentiable_all_reduce(
+            tensor,
+            op=dist.ReduceOp.SUM,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        global_step: Optional[
+            Union[int, torch.Tensor]
+        ] = None,
+    ) -> torch.Tensor:
+        if x.ndim != 2:
+            raise ValueError(
+                f"x must have shape [N, K], got {tuple(x.shape)}."
+            )
+
+        if x.shape[0] == 0:
+            raise ValueError("The embedding batch is empty.")
+
+        if not x.is_floating_point():
+            raise TypeError(
+                "x must be a floating-point tensor."
+            )
+
+        if (
+            self.force_float32
+            and x.dtype in {
+                torch.float16,
+                torch.bfloat16,
+            }
+        ):
+            x = x.float()
+
+        num_local_samples, latent_dim = x.shape
+
+        directions = self._sample_directions(
+            latent_dim=latent_dim,
+            device=x.device,
+            dtype=x.dtype,
+            global_step=global_step,
+        )
+
+        projected = x @ directions
+
+        integration_points = self.integration_points.to(
+            device=x.device,
+            dtype=x.dtype,
+        )
+
+        target_cf = self.target_cf.to(
+            device=x.device,
+            dtype=x.dtype,
+        )
+
+        phase = (
+            projected.unsqueeze(-1)
+            * integration_points
+        )
+
+        real_sum = torch.cos(phase).sum(dim=0)
+        imaginary_sum = torch.sin(phase).sum(dim=0)
+
+        global_count = x.new_tensor(
+            float(num_local_samples)
+        )
+
+        if self.sync_ddp and self._is_distributed():
+            real_sum = self._distributed_sum(real_sum)
+            imaginary_sum = self._distributed_sum(
+                imaginary_sum
+            )
+
+            dist.all_reduce(
+                global_count,
+                op=dist.ReduceOp.SUM,
+            )
+
+        empirical_cf_real = real_sum / global_count
+        empirical_cf_imaginary = (
+            imaginary_sum / global_count
+        )
+
+        squared_error = (
+            (empirical_cf_real - target_cf).square()
+            + empirical_cf_imaginary.square()
+        )
+
+        weighted_error = squared_error * target_cf
+
+        per_slice_loss = torch.trapezoid(
+            weighted_error,
+            integration_points,
+            dim=-1,
+        )
+
+        per_slice_loss = (
+            global_count * per_slice_loss
+        )
+
+        if self.reduction == "mean":
+            return per_slice_loss.mean()
+
+        if self.reduction == "sum":
+            return per_slice_loss.sum()
+
+        return per_slice_loss
 
 
 
 
 class PretrainingLoss(nn.Module):
-    def __init__(self, weights=None, adaptive=True, warmup_steps=2000,
-                 jepa_warmup_frac=0.05, total_steps=100_000,
-                 sigreg_token_weight=0.1, ema_momentum=0.01,
-                 max_weight_ratio=4.0, **kw):
+    def __init__(self, config=None):
         super().__init__()
-        self.jepa = JEPALoss(**kw.get("jepa", {}))
-        self.spectral = SpectralLoss(**kw.get("spectral", {}))
-        self.physio = PhysioLoss(**kw.get("physio", {}))
-        self.sigreg = SIGRegLoss(**kw.get("sigreg", {}))
+        config = config or {}
+        self.sigreg_weight = float(config.get("sigreg_weight", 0.05))
 
-        w = {"jepa": 1.0, "spectral": 0.5, "physio": 0.1, "sigreg": 0.1}
-        w.update(weights or {})
-        self.base_w = w
-        self.keys = ["jepa", "spectral", "physio", "sigreg"]
+        if not 0.0 <= self.sigreg_weight <= 1.0:
+            raise ValueError(
+                "sigreg_weight must be between 0 and 1."
+            )
 
-        self.adaptive = adaptive
-        self.ema_momentum = ema_momentum
-        self.sigreg_token_weight = sigreg_token_weight
-        self.jepa_warmup = int(jepa_warmup_frac * total_steps)
-        self.warmup_steps = warmup_steps
-        self.max_weight_ratio = max_weight_ratio
+        self.return_components = bool(
+            config.get("return_components", False)
+        )
 
-        self.register_buffer("ema", torch.ones(len(self.keys)))
-        self.register_buffer("ema_ref", torch.ones(len(self.keys)))
-        self.register_buffer("ema_init", torch.zeros(len(self.keys), dtype=torch.bool))
-        self.register_buffer("step", torch.zeros(1, dtype=torch.long))
+        sigreg_config = dict(config.get("sigreg") or {})
 
-    def _jepa_ramp(self):
-        s = int(self.step.item())
-        if s >= self.jepa_warmup:
-            return 1.0
-        return 0.5 * (1 - math.cos(math.pi * s / max(self.jepa_warmup, 1)))
+        if "integration_range" in sigreg_config:
+            sigreg_config["integration_range"] = tuple(
+                sigreg_config["integration_range"]
+            )
 
-    @torch.no_grad()
-    def _scale(self, i, value):
-        if not self.adaptive:
-            return 1.0
-        v = value.detach().abs().clamp(min=1e-8)
-        if not self.ema_init[i]:
-            if not self.training:
-                return (1.0 / v).item()
-            self.ema[i] = v
-            self.ema_ref[i] = v
-            self.ema_init[i] = True
-        elif self.training:
-            self.ema[i].mul_(1 - self.ema_momentum).add_(self.ema_momentum * v)
-        r = max(1.0, self.max_weight_ratio)
-        ref = self.ema_ref[i].clamp(min=1e-8)
-        denom = self.ema[i].clamp(min=ref / r, max=ref * r)
-        return (1.0 / denom.clamp(min=1e-8)).item()
+        self.alignment_loss = AlignmentLoss(
+            config.get("alignment")
+        )
 
-    def forward(self, outputs, batch):
-        valid = batch.get("valid")
-        raw = {}
+        self.sigreg_loss = SIGRegLoss(
+            **sigreg_config
+        )
 
-        if "jepa_pred" in outputs:
-            raw["jepa"] = self.jepa(outputs["jepa_pred"], outputs["z_target"],
-                                    batch["mask"], valid)
+    @staticmethod
+    def _reduce_to_scalar(
+        loss: torch.Tensor,
+    ) -> torch.Tensor:
+        if loss.ndim == 0:
+            return loss
+        return loss.mean()
 
-        if "spectral_pred" in outputs:
-            spec_t = self.spectral.targets(batch["x_clean"])
-            raw["spectral"] = self.spectral(outputs["spectral_pred"], spec_t, valid)
+    def forward(
+        self,
+        z_global: torch.Tensor,
+        z_local: torch.Tensor,
+        global_step: Optional[
+            Union[int, torch.Tensor]
+        ] = None,
+    ):
+        if z_global.ndim != 3:
+            raise ValueError(
+                "z_global must have shape [B, V, D]."
+            )
 
-        if "physio_pred" in outputs:
-            phys_t = self.physio.targets(batch["x_clean"])
-            raw["physio"] = self.physio(outputs["physio_pred"], phys_t, valid)
+        if z_local.ndim != 3:
+            raise ValueError(
+                "z_local must have shape [B, L, D]."
+            )
 
-        sig = self.sigreg(outputs["z_glob"])
-        if self.sigreg_token_weight > 0:
-            sig = sig + self.sigreg_token_weight * self.sigreg(outputs["z"], valid)
-        raw["sigreg"] = sig
+        if z_global.shape[0] != z_local.shape[0]:
+            raise ValueError(
+                "z_global and z_local must have "
+                "the same batch size."
+            )
 
-        total = 0.0
-        logs = {}
-        for i, k in enumerate(self.keys):
-            if k not in raw:
-                continue
-            v = raw[k]
-            w = self.base_w[k] * self._scale(i, v)
-            if k == "jepa":
-                w = w * self._jepa_ramp()
-            total = total + w * v
-            logs[f"loss/{k}"] = v.detach()
-            logs[f"weight/{k}"] = float(w)
+        if z_global.shape[-1] != z_local.shape[-1]:
+            raise ValueError(
+                "z_global and z_local must have "
+                "the same latent dimension."
+            )
 
-        if self.training:
-            self.step += 1
-        logs["loss/total"] = total.detach()
-        return total, logs
+        if z_global.shape[1] == 0:
+            raise ValueError(
+                "z_global must contain at least one view."
+            )
 
-    @torch.no_grad()
-    def grad_norms(self, model):
-        out = {}
-        for name, mod in [("encoder", model.encoder)]:
-            g = [p.grad.norm() ** 2 for p in mod.parameters() if p.grad is not None]
-            out[f"gradnorm/{name}"] = torch.stack(g).sum().sqrt().item() if g else 0.0
-        return out
+        alignment_loss = self.alignment_loss(
+            z_global,
+            z_local,
+        )
 
-    
+        alignment_loss = self._reduce_to_scalar(
+            alignment_loss
+        )
+
+        all_views = torch.cat(
+            [z_global, z_local],
+            dim=1,
+        )
+
+        sigreg_losses = []
+
+        for view_index in range(all_views.shape[1]):
+            view_loss = self.sigreg_loss(
+                all_views[:, view_index, :],
+                global_step=global_step,
+            )
+
+            sigreg_losses.append(
+                self._reduce_to_scalar(view_loss)
+            )
+
+        sigreg_loss = torch.stack(
+            sigreg_losses
+        ).mean()
+
+        total_loss = (
+            (1.0 - self.sigreg_weight)
+            * alignment_loss
+            + self.sigreg_weight
+            * sigreg_loss
+        )
+
+        if self.return_components:
+            return total_loss, {
+                "total_loss": total_loss.detach(),
+                "alignment_loss": alignment_loss.detach(),
+                "sigreg_loss": sigreg_loss.detach(),
+                "align_ratio": self._alignment_ratio(
+                    alignment_loss,
+                    all_views,
+                    z_global.shape[1],
+                    z_local.shape[1],
+                ),
+                "z_norm": all_views.detach().float().norm(dim=-1).mean(),
+            }
+
+        return total_loss
+
+    @staticmethod
+    def _chance_alignment(
+        num_global: int,
+        num_local: int,
+    ) -> float:
+        if num_global < 1:
+            return 0.0
+
+        total = num_global + num_local
+
+        return (
+            (num_global - 1)
+            + num_local * (num_global + 1) / num_global
+        ) / total
+
+    def _alignment_ratio(
+        self,
+        alignment_loss: torch.Tensor,
+        all_views: torch.Tensor,
+        num_global: int,
+        num_local: int,
+    ) -> torch.Tensor:
+        chance = self._chance_alignment(num_global, num_local)
+        detached = all_views.detach().float()
+
+        if chance <= 0.0 or detached.shape[0] < 2:
+            return torch.zeros((), device=all_views.device)
+
+        variance = detached.reshape(-1, detached.shape[-1]).var(dim=0).mean()
+
+        return alignment_loss.detach() / (chance * variance + 1e-8)
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    torch.manual_seed(42)
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    batch_size = 16
+    num_global_views = 3
+    num_local_views = 4
+    latent_dim = 32
+
+    z_global = torch.randn(
+        batch_size,
+        num_global_views,
+        latent_dim,
+        device=device,
+        requires_grad=True,
+    )
+
+    z_local = torch.randn(
+        batch_size,
+        num_local_views,
+        latent_dim,
+        device=device,
+        requires_grad=True,
+    )
+
+    config = {
+        "return_components": True,
+        "sigreg_weight": 0.05,
+        "alignment": {
+            "detach_center": False,
+            "feature_reduction": "mean",
+            "reduction": "mean",
+        },
+        "sigreg": {
+            "num_slices": 64,
+            "num_integration_points": 17,
+            "integration_range": [-5.0, 5.0],
+            "reduction": "mean",
+            "base_seed": 0,
+            "sync_ddp": False,
+            "force_float32": True,
+        },
+    }
+
+    criterion = PretrainingLoss(config).to(device)
+
+    total_loss, metrics = criterion(
+        z_global=z_global,
+        z_local=z_local,
+        global_step=0,
+    )
+
+    assert total_loss.ndim == 0
+    assert torch.isfinite(total_loss)
+    assert torch.isfinite(metrics["alignment_loss"])
+    assert torch.isfinite(metrics["sigreg_loss"])
+
+    total_loss.backward()
+
+    assert z_global.grad is not None
+    assert z_local.grad is not None
+    assert torch.isfinite(z_global.grad).all()
+    assert torch.isfinite(z_local.grad).all()
+    assert z_global.grad.abs().sum() > 0
+    assert z_local.grad.abs().sum() > 0
+
+    print(f"Device: {device}")
+    print(f"Total loss: {metrics['total_loss'].item():.6f}")
+    print(
+        "Alignment loss: "
+        f"{metrics['alignment_loss'].item():.6f}"
+    )
+    print(
+        "SIGReg loss: "
+        f"{metrics['sigreg_loss'].item():.6f}"
+    )
+    print(
+        "Global gradient norm: "
+        f"{z_global.grad.norm().item():.6f}"
+    )
+    print(
+        "Local gradient norm: "
+        f"{z_local.grad.norm().item():.6f}"
+    )
+    print("All tests passed.")

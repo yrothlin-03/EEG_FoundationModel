@@ -1,40 +1,67 @@
-training:
-  out_dir: outputs/pretraining
+data:
+  datasets: ["TUEG"]
+  split_ratio: [0.9, 0.1]
+  batch_size: 16
+  num_workers: 4
+  channel_mode: mapped
+  seed: 100
+  pin_memory: true
+  persistent_workers: false
+  drop_last: false
+  shuffle: true
+  normalize: true
+  stats_max_samples: 2000
+
+  augment: true
+  n_global_views: 2
+  n_local_views: 6
+  noise_std: [0.1, 0.5]
+  global_amp_scale: [0.5, 2.0]
+  temp_shift: [-0.3, 0.3]
+  canal_scale_gain: [0.8, 1.25]
+  time_mask_ratio: [0.2, 0.5]
+  freq_mask_ratio: [0.2, 0.5]
+  spatial_mask_ratio: [0.3, 0.6]
+
+
+trainer:
+  out_dir: outputs/pretraining/tests
   num_epochs: 20
   resume_from: null
 
-  lr: 1.5e-4
+  lr: 1.0e-4
   betas: [0.9, 0.95]
   weight_decay: 0.05
-  warmup_frac: 0.05
   grad_clip: 1.0
   use_amp: true
+  T_max: 10000
+  eta_min: 0.00001
 
-  channel_dropout: 0.2
-  max_channel_drop: 3
-  detach_target_until: null
-  ema_momentum_start: 0.996
-  ema_momentum_end: 1.0
-
-  adaptive_weights: true
-  max_weight_ratio: 4.0
-  jepa_warmup_frac: 0.05
-  sigreg_token_weight: 0.1
-
-  loss_weights:
-    jepa: 1.0
-    spectral: 0.5
-    physio: 0.5
-    sigreg: 1.0
-
-  masking:
-    probs: [0.40, 0.25, 0.20, 0.15]
-    ratio_start: 0.40
-    ratio_end: 0.75
-    ramp_frac: 0.20
-
+  max_train_step: 500
+  max_val_step: 100
   log_step: 50
   plot_every: 1
-  diag_every: 1
-  max_train_step: 2000
-  max_val_step: 200
+  rankme_rows: 2048
+
+
+
+loss: 
+  return_components: true
+  sigreg_weight: 0.05
+
+  alignment:
+    detach_center: false
+    feature_reduction: mean
+    reduction: mean
+
+  sigreg:
+    num_slices: 256
+    num_integration_points: 17
+    integration_range:
+      - -5.0
+      - 5.0
+    reduction: mean
+    base_seed: 0
+    sync_ddp: true
+    force_float32: true
+    eps: 1.0e-12

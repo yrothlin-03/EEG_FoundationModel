@@ -3,12 +3,19 @@ import numpy as np
 import torch
 
 from utils import PretrainingTrainer, parse_config
-from eeg_preprocessing.loaders import build_pretraining_loaders, EEGAugment
+from eeg_preprocessing.loaders import TARGET_CHS, build_pretraining_loaders
 from model import EEGFM
 
 
-TARGET_CHS = ["FP1", "FP2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2",
-              "F7", "F8", "T7", "T8", "P7", "P8", "FZ", "CZ", "PZ"]
+RANGE_KEYS = (
+    "noise_std",
+    "global_amp_scale",
+    "temp_shift",
+    "canal_scale_gain",
+    "time_mask_ratio",
+    "freq_mask_ratio",
+    "spatial_mask_ratio",
+)
 
 
 def build_positions(channels=TARGET_CHS, montage_name="standard_1020"):
@@ -21,6 +28,18 @@ def build_positions(channels=TARGET_CHS, montage_name="standard_1020"):
     return torch.from_numpy(np.stack(pos)).float()
 
 
+def build_loaders(data_config):
+    kwargs = dict(data_config)
+    kwargs["split_ratio"] = tuple(kwargs["split_ratio"])
+    for key in RANGE_KEYS:
+        if isinstance(kwargs.get(key), list):
+            kwargs[key] = tuple(kwargs[key])
+    train_loader, val_loader = build_pretraining_loaders(**kwargs)
+    if val_loader is None:
+        raise ValueError("aucun loader de validation construit, vérifier data.split_ratio.")
+    return {"train": train_loader, "val": val_loader}
+
+
 def build_model(model_config, pos):
     return EEGFM(pos=pos, **model_config)
 
@@ -28,41 +47,20 @@ def build_model(model_config, pos):
 def main(model_config, pretraining_config):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data = pretraining_config["data"]
-    augment_enabled = data["augment"]
-    augmenter = EEGAugment() if augment_enabled else None
-    train_loader, val_loader, _ = build_pretraining_loaders(
-        datasets=data["datasets"],
-        batch_size=data["batch_size"],
-        split_ratio=data["split_ratio"],
-        num_workers=data["num_workers"],
-        pin_memory=data["pin_memory"],
-        persistent_workers=data["persistent_workers"],
-        seed=data["seed"],
-        channel_mode=data["channel_mode"],
-        augment=augment_enabled,
-        augmenter=augmenter,
-        scale_factor=data["scale_factor"],
-        variant=data["variant"],
-    )
+    loaders = build_loaders(pretraining_config["data"])
+    pos = build_positions()
 
-    channels = data.get("target_channels") or TARGET_CHS
-    pos = build_positions(channels)
-
-    batch = next(iter(train_loader))
-    if isinstance(batch, dict):
-        x = batch["x"]
-    elif isinstance(batch, (list, tuple)):
-        x = batch[0]
-    else:
-        x = batch
+    batch = next(iter(loaders["train"]))
+    x, presence = batch[0], batch[1]
+    n_views = (len(batch[2]), len(batch[3])) if len(batch) > 3 else (0, 0)
     batch_size, n_channels, seq_len = x.shape
-    print(f"batch: {tuple(x.shape)} | channels: {n_channels} | seq_len: {seq_len}")
+    print(f"batch: {tuple(x.shape)} | presence: {tuple(presence.shape)} "
+          f"| vues globales/locales: {n_views[0]}/{n_views[1]}")
 
     if n_channels != pos.shape[0]:
         raise ValueError(
             f"{n_channels} canaux dans les données mais {pos.shape[0]} positions "
-            f"fournies. Vérifier data.target_channels / channel_mode."
+            f"fournies. Vérifier data.channel_mode."
         )
 
     model_kwargs = dict(model_config["model"])
@@ -75,15 +73,12 @@ def main(model_config, pretraining_config):
 
     model = build_model(model_kwargs, pos).to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    n_enc = sum(p.numel() for p in model.encoder.parameters())
-    print(f"params entraînables: {n_params/1e6:.1f}M (encodeur {n_enc/1e6:.1f}M, "
-          f"têtes {(n_params-n_enc)/1e6:.1f}M) | "
-          f"n_tokens: {model.n_tokens} | token_stride: {model.token_stride()}")
+    print(f"params entraînables: {n_params/1e6:.1f}M | n_tokens: {model.n_tokens} "
+          f"| token_stride: {model.token_stride()} | z_dim: {model.z_dim}")
 
-    loaders = {"train": train_loader, "val": val_loader}
     trainer = PretrainingTrainer(model, loaders, pretraining_config)
 
-    resume = pretraining_config["training"].get("resume_from")
+    resume = pretraining_config["trainer"].get("resume_from")
     if resume:
         trainer.load_checkpoint(resume)
         print(f"reprise depuis {resume} à l'epoch {trainer.epoch}")

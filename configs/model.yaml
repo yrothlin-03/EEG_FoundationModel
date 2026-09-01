@@ -4,8 +4,11 @@ model:
   spatial: [conv, conv, beamformer, beamformer]
   n_heads: 8
 
+  stem: patch
   n_bands: 32
   kernel_size: 65
+  patch_hidden: 32
+  patch_kernel: 9
   fs: 200
   pool: 20
   window: 6000
@@ -14,17 +17,8 @@ model:
   drop_path: 0.15
   dropout: 0.0
   n_dist_bins: 16
+  n_global_queries: 4
+  grad_checkpointing: true
 
-  predictor_depth: 2
-  predictor_ratio: 0.5
-
-  n_fft_list: [256, 512, 1024]
   hop_div: 4
   f_max: 45.0
-  n_physio_feats: 10
-
-  use_jepa: true
-  use_spectral: true
-  use_physio: true
-  detach_target: true
-  use_ema_target: true

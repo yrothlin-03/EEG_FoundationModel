@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from .utils import ConformerConv, SwiGLU, DropPath, SpatialConv, DownSample
 from .beamformer_attention import BeamformerAttention, DistanceBias
 from .mamba_layer import BiMamba2Temporal
 from .stem import Stem
+from .tokenizer import PatchStem
 from .bottleneck import Bottleneck
 
 
@@ -22,8 +24,7 @@ class EncoderBlock(nn.Module):
         self.spatial_conv = SpatialConv(n_channels, dim)
 
         self.norm_t = nn.RMSNorm(dim)
-        self.temporal = BiMamba2Temporal(dim, d_state=128, headdim=64,
-                                         dropout=dropout)
+        self.temporal = BiMamba2Temporal(dim, d_state=128, headdim=64, dropout=dropout)
 
         self.norm_c = nn.RMSNorm(dim)
         self.conv_mod = ConformerConv(dim, kernel_size=15, dropout=dropout)
@@ -72,14 +73,26 @@ class Encoder(nn.Module):
         drop_path=0.15,
         dropout=0.0,
         n_dist_bins=16,
+        n_global_queries=4,
+        grad_checkpointing=False,
+        stem="gabor",
+        patch_hidden=64,
+        patch_kernel=9,
     ):
         super().__init__()
         assert len(dims) == len(depths) == len(spatial)
+        assert stem in ("gabor", "patch")
         C = pos.shape[0]
         self.n_channels, self.dims, self.pool = C, dims, pool
+        self.grad_checkpointing = grad_checkpointing
+        self.stem_mode = stem
 
-        self.stem = Stem(C, dim=dims[0], n_bands=n_bands,
-                         K=kernel_size, fs=fs, pool=pool)
+        if stem == "gabor":
+            self.stem = Stem(C, dim=dims[0], n_bands=n_bands,
+                             K=kernel_size, fs=fs, pool=pool)
+        else:
+            self.stem = PatchStem(C, dim=dims[0], patch=pool,
+                                  hidden=patch_hidden, kernel=patch_kernel)
         self.dist_bias = DistanceBias(pos, n_heads, n_bins=n_dist_bins)
 
         dpr = torch.linspace(0, drop_path, sum(depths)).tolist()
@@ -97,8 +110,10 @@ class Encoder(nn.Module):
             if lvl < len(dims) - 1:
                 self.downs.append(DownSample(d, dims[lvl + 1]))
 
-        self.bottleneck = Bottleneck(dims[-1], n_heads,
-                                     z_dim=z_dim, dropout=dropout)
+        self.bottleneck = Bottleneck(
+            dims[-1], n_heads, z_dim=z_dim, dropout=dropout,
+            n_queries=n_global_queries,
+        )
         self.apply(self._init)
 
     @staticmethod
@@ -118,10 +133,15 @@ class Encoder(nn.Module):
         bias = self.dist_bias()
         kpm = (presence == 0)
 
+        use_ckpt = self.grad_checkpointing and self.training and torch.is_grad_enabled()
+
         hidden = []
         for lvl, stage in enumerate(self.stages):
             for blk in stage:
-                h = blk(h, bias, kpm)
+                if use_ckpt:
+                    h = checkpoint(blk, h, bias, kpm, use_reentrant=False)
+                else:
+                    h = blk(h, bias, kpm)
             if return_hidden:
                 hidden.append(h)
             if lvl < len(self.downs):
@@ -144,6 +164,7 @@ class Encoder(nn.Module):
 
     @torch.no_grad()
     def diagnostics(self):
-        out = {"gabor_hz": self.stem.fb.frequencies().cpu()}
-        out["dist_bias"] = self.dist_bias.table.detach().cpu()
+        out = {"dist_bias": self.dist_bias.table.detach().cpu()}
+        if self.stem_mode == "gabor":
+            out["gabor_hz"] = self.stem.fb.frequencies().cpu()
         return out

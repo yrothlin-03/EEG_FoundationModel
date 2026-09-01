@@ -46,7 +46,6 @@ def _config_path_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--model_config", type=str, default="configs/model.yaml")
     parser.add_argument("--pretraining_config", type=str, default="configs/pretraining.yaml")
-    parser.add_argument("--data_config", type=str, default="configs/pretraining_data.yaml")
     return parser
 
 
@@ -55,9 +54,6 @@ def get_parser(argv=None):
 
     model_config = _load(known.model_config)
     pretraining_config = _load(known.pretraining_config)
-    data_config = _load(known.data_config)
-    if data_config:
-        pretraining_config.setdefault("data", {}).update(data_config.get("data", data_config))
 
     routing = {}
     for key in _flatten(model_config):
@@ -66,7 +62,7 @@ def get_parser(argv=None):
         routing[key] = "pretraining"
 
     parser = argparse.ArgumentParser(
-        parents=[_config_path_parser()], description="EEG-VAE pretraining"
+        parents=[_config_path_parser()], description="EEG foundation model pretraining"
     )
     flat_values = {**_flatten(model_config), **_flatten(pretraining_config)}
     for key, val in flat_values.items():

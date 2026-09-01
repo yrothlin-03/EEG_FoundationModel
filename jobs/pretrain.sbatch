@@ -28,9 +28,8 @@ mkdir -p logs/pretraining
 python pretrain.py \
     --model_config configs/model.yaml \
     --pretraining_config configs/pretraining.yaml \
-    --data_config configs/pretraining_data.yaml \
-    --training.num_epochs 20 \
-    --training.out_dir /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/multi_datasets \
-    --training.max_train_step 2000 \
-    --training.max_val_step 200 \
+    --trainer.num_epochs 20 \
+    --trainer.out_dir /home/infres/yrothlin-24/EEG_Foundation_Model/outputs/pretraining/test \
+    --trainer.max_train_step 2000 \
+    --trainer.max_val_step 200 \
     --data.datasets '["TUEG"]'

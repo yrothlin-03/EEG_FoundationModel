@@ -3,8 +3,10 @@
 
 % ---------- Packages ----------
 \usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{hyperref}
 \usepackage{pifont}
 \usepackage{booktabs}
@@ -14,7 +16,7 @@
 \newcommand{\cmark}{\textcolor{green!50!black}{\ding{51}}}
 \newcommand{\xmark}{\textcolor{red!70!black}{\ding{55}}}
 \DeclareMathOperator*{\argmin}{arg\,min}
-
+\newcommand{\Lloss}{\mathcal{L}}
 
 % ---------- Theme ----------
 \usetheme{Madrid}
@@ -22,18 +24,22 @@
 
 \definecolor{TPBordeaux}{RGB}{140,30,45}
 \setbeamercolor{structure}{fg=TPBordeaux}
+\setbeamertemplate{navigation symbols}{}
+
+\AtBeginSection[]{
+  \begin{frame}[plain,noframenumbering]
+    \vfill
+    \centering
+    \usebeamerfont{title}\insertsectionhead\par
+    \vfill
+  \end{frame}
+}
+
 % ---------- Title info ----------
-\title[Research Proeject RECH202]{Foundation model for EEG with residual vector quantized autoencoder}
+\title[Research Project RECH202]{Modèle de fondation pour l'EEG : pré-entraînement JEPA}
 \author{Yanic ROTHLINGSHOFER}
 \institute[]{\large \it Télécom Paris}
 \date{\underline{Supervisor :} Van Tam Nguyen}
-
-% ---------- Logo ----------
-% Drop logo_TP.png next to this file (presentation/). Skipped silently if absent.
-% \titlegraphic{
-%     \vspace{0.2cm}
-%     \IfFileExists{logo_TP.png}{\includegraphics[width=0.1\linewidth]{logo_TP.png}}{}
-% }
 
 \begin{document}
 
@@ -41,160 +47,193 @@
   \titlepage
 \end{frame}
 
-\begin{frame}{Outline}
-\tableofcontents
+\begin{frame}{Plan}
+  \tableofcontents
 \end{frame}
 
 % ======================================================================
-\section{EEG-RQVAE architecture}
+\section{Modèles de fondation pour l'EEG}
 % ======================================================================
 
-\begin{frame}{Encoding stage --- Mamba block}
-  \centering
-  \includegraphics[width=\linewidth,height=0.80\textheight,keepaspectratio]%
-    {../figures/encoder_stage/encoder_stage.pdf}
-
-  \vspace{0.3cm}
-  {\footnotesize $N_{\text{blocks}}$ residual conv + Mamba2 blocks per stage, then a stride-2 downsampling.}
-\end{frame}
-
-\begin{frame}{Model pipeline --- U-shaped autoencoder}
-  \centering
-  \includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]%
-    {../figures/model_pipeline/model_pipeline.pdf}
-\end{frame}
-
-\begin{frame}{Pretraining pipeline --- denoising VQ autoencoder}
-  \centering
-  \includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]%
-    {../figures/pretraining_pipeline/pretraining_pipeline.pdf}
-\end{frame}
-
-% ======================================================================
-\section{Pretraining objectives}
-% ======================================================================
-
-\begin{frame}{Multi-resolution STFT loss}
-  Compares reconstruction $\hat{x}$ and target $x$ in the time--frequency domain,
-  over several FFT resolutions $\mathcal{S}=\{64,128,256,512\}$ (Hann window, hop $=n/4$):
-  \[
-    \mathcal{L}_{\text{STFT}}
-    = \frac{1}{|\mathcal{S}|}\sum_{s\in\mathcal{S}}
-      \underbrace{\frac{\big\|\,|S_s\hat{x}|-|S_s x|\,\big\|_F}{\big\|\,|S_s x|\,\big\|_F}}_{\text{spectral convergence}}
-      \;+\;
-      \underbrace{\big\|\log|S_s\hat{x}|-\log|S_s x|\big\|_1}_{\text{log-magnitude}}
-  \]
-  where $S_s x$ is the STFT of $x$ at resolution $s$ (magnitude only).
-
-  \vspace{0.2cm}
+\begin{frame}{I-JEPA --- prédiction dans l'espace des représentations}
   \begin{columns}[T]
-    \begin{column}{0.5\textwidth}
-      \textbf{Advantages}
-      \begin{itemize}
-        \item \cmark\ Captures spectral content (EEG rhythms $\delta,\theta,\alpha,\beta,\gamma$) missed by time-domain L1.
-        \item \cmark\ Multi-resolution: both time and frequency detail.
-        \item \cmark\ Cheap and differentiable (FFT).
-      \end{itemize}
+    \begin{column}{0.52\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{figures/i_jepa.jpg}
     \end{column}
-    \begin{column}{0.5\textwidth}
-      \textbf{Drawbacks}
+    \begin{column}{0.46\textwidth}
+      {\footnotesize
+      Un \emph{context encoder} $f_\theta$ encode un bloc de contexte ; un \emph{target encoder}
+      $f_{\bar\theta}$ (EMA de $f_\theta$) encode plusieurs blocs cibles. Un \emph{predictor}
+      $g_\phi$, conditionné par les tokens de position des cibles, prédit leurs représentations :
+      \[
+        \Lloss_{\text{I-JEPA}}
+        = \sum_{b} \big\| g_\phi\!\left(f_\theta(x_{\text{ctx}}),\, p_b\right) - \mathrm{sg}\big[f_{\bar\theta}(x_b)\big] \big\|_2^2
+      \]
       \begin{itemize}
-        \item \xmark\ Magnitude only: phase is ignored.
-        \item \xmark\ Fixed time/frequency trade-off per window.
-        \item \xmark\ Sensitive to window/hop choices.
-      \end{itemize}
+        \item \cmark\ Pas de reconstruction pixel/signal : cible sémantique, pas de détail haute fréquence.
+        \item \cmark\ Pas de paires négatives, pas d'augmentations lourdes.
+        \item \xmark\ Anti-collapse purement \emph{architectural} : EMA + \texttt{stop-grad} + asymétrie.
+        \item \xmark\ Beaucoup d'hyperparamètres couplés (momentum, taille des blocs, \emph{warm-up}).
+      \end{itemize}}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}{Continuous Wavelet Transform (CWT) loss}
-  Same idea as STFT but with complex Morlet wavelets $\psi_a$ at scales $a\in A$ tuned to
-  EEG bands ($\delta$ to $\gamma$); $W_a x = x * \psi_a$:
+
+\begin{frame}{EEGPT --- masquage spatio-temporel et double objectif}
+  \centering
+  \includegraphics[width=\linewidth,height=0.85\textheight,keepaspectratio]{figures/EEGPT.jpg}
+\end{frame}
+
+\begin{frame}{REVE --- encodage spatio-temporel 4D et montages hétérogènes}
+  \centering
+  \includegraphics[width=\linewidth,height=0.85\textheight,keepaspectratio]{figures/reve.png}
+\end{frame}
+
+% ======================================================================
+\section{Paradigme de pré-entraînement}
+% ======================================================================
+
+\begin{frame}
+  \frametitle{LeJEPA --- 1. perte d'alignement}
+  \textbf{Mise en place.} Un \textbf{seul} encodeur $f_\theta$, ni EMA, ni \emph{predictor}, ni \texttt{stop-grad}.
+  Pour chaque signal $x_i$ du batch on tire $V$ vues globales et $L$ vues locales
+  (bruit, échelle globale et par canal, décalage temporel, masques temps / fréquence / canaux) :
   \[
-    \mathcal{L}_{\text{CWT}}
-    = \frac{1}{|A|}\sum_{a\in A}
-      \frac{\big\|\,|W_a\hat{x}|-|W_a x|\,\big\|_F}{\big\|\,|W_a x|\,\big\|_F}
-      \;+\;
-      \big\|\log|W_a\hat{x}|-\log|W_a x|\big\|_1
+    z_i^{(u)} = f_\theta\big(x_i^{(u)}\big) \in \mathbb{R}^D,
+    \qquad u = 1,\dots,V{+}L
+  \]
+  ($z_i^{(u)} = z_{\text{glob}}$, la sortie \emph{attention pooling} du bottleneck.)
+
+  \vspace{0.15cm}
+  \textbf{Objectif.} Toutes les vues d'un même signal doivent converger vers le centre de ses vues globales :
+  \vspace{-0.1cm}
+  \[
+    c_i = \frac{1}{V}\sum_{v=1}^{V} z_i^{(v)},
+    \qquad
+    \Lloss_{\text{align}}
+    = \frac{1}{B\,(V{+}L)\,D}\sum_{i=1}^{B}\ \sum_{u=1}^{V+L}
+      \big\| z_i^{(u)} - c_i \big\|_2^2
   \]
 
-  \vspace{0.2cm}
+  \vspace{0.1cm}
+  {\footnotesize
+  \begin{itemize}
+    \item Le centre $c_i$ n'utilise que les vues \emph{globales} : les vues locales sont tirées vers elles,
+          jamais l'inverse.
+    \item $c_i$ n'est pas détaché $\Rightarrow$ le gradient circule dans toutes les vues (aucune asymétrie).
+    \item Seule, cette perte est minimisée par la solution triviale $z \equiv \text{const}$ : d'où la
+          régularisation.
+  \end{itemize}}
+\end{frame}
+
+\begin{frame}
+  \frametitle{LeJEPA --- 2. perte de régularisation (SIGReg)}
+  \textbf{Objectif.} Forcer la distribution des $z$ \emph{dans le batch} à être une gaussienne isotrope
+  $\mathcal{N}(0, I_D)$. Test fait sur des projections 1D (\emph{sketching}) :
+  $S$ directions $\theta_s \sim \mathcal{U}(\mathbb{S}^{D-1})$, puis comparaison de la fonction
+  caractéristique empirique de $\langle \theta_s, z\rangle$ à celle de la gaussienne, $e^{-t^2/2}$ :
+  \vspace{-0.1cm}
+  \[
+    \hat\varphi_s(t) = \frac{1}{B}\sum_{i=1}^{B} e^{\mathrm{i}\,t\,\langle \theta_s,\, z_i\rangle},
+    \qquad
+    \Lloss_{\text{SIGReg}}
+    = \frac{1}{S}\sum_{s=1}^{S} B \int_{-5}^{5}
+      \big|\hat\varphi_s(t) - e^{-t^2/2}\big|^2\, \underbrace{e^{-t^2/2}}_{\text{poids}}\,\mathrm{d}t
+  \]
+
+  \vspace{0.1cm}
+  \textbf{Objectif total}, un unique hyperparamètre $\lambda$ :
+  \vspace{-0.1cm}
+  \[
+    \Lloss = (1-\lambda)\,\Lloss_{\text{align}} + \lambda\,\Lloss_{\text{SIGReg}},
+    \qquad \lambda = 0.05
+  \]
+
+  \vspace{-0.1cm}
+  {\footnotesize
+  \begin{itemize}
+    \item En pratique : $S = 256$ directions, intégrale par trapèzes sur $17$ points de $[-5,5]$,
+          calculée en \texttt{float32} et sommée sur les GPU en DDP.
+    \item Directions retirées à chaque pas depuis \texttt{base\_seed}$+$\texttt{global\_step} :
+          identiques sur tous les rangs, mais renouvelées à chaque itération.
+    \item Appliquée séparément à chaque vue, puis moyennée sur les $V{+}L$ vues.
+  \end{itemize}}
+\end{frame}
+
+\begin{frame}{LeJEPA --- pourquoi ce choix}
   \begin{columns}[T]
     \begin{column}{0.5\textwidth}
-      \textbf{Advantages}
+      \textbf{Avantages}
       \begin{itemize}
-        \item \cmark\ Adaptive time--frequency resolution: good for non-stationary EEG and transients.
-        \item \cmark\ Scales aligned with physiological bands.
-        \item \cmark\ Better low-frequency localisation than fixed STFT.
+        \item \cmark\ Anti-collapse \emph{explicite} : SIGReg interdit toute distribution dégénérée,
+              plus besoin d'EMA, de \texttt{stop-grad} ni de \emph{predictor}.
+        \item \cmark\ Un seul hyperparamètre de perte ($\lambda$).
+        \item \cmark\ La gaussienne isotrope est le prior qui minimise le risque du \emph{probing}
+              linéaire en aval.
+        \item \cmark\ Coût $\mathcal{O}(B\,S\,P)$ par vue : négligeable devant l'encodeur.
       \end{itemize}
     \end{column}
     \begin{column}{0.5\textwidth}
-      \textbf{Drawbacks}
+      \textbf{Limites / points de vigilance}
       \begin{itemize}
-        \item \xmark\ Computationally heavier (convolution at many scales).
-        \item \xmark\ Sensitive to mother wavelet / scale choice.
-        \item \xmark\ Currently disabled ($\lambda_{\text{cwt}}=0$) for cost.
+        \item \xmark\ SIGReg est une statistique \emph{sur le batch} : elle exige un batch large
+              (à $B=4$ le latent collapse).
+        \item \xmark\ Les vues doivent rester informatives : des gains d'augmentation nuls
+              annulent la diversité des vues globales.
+        \item \xmark\ Invariance imposée par les augmentations : si elles effacent
+              l'information de tâche, elle disparaît du latent.
       \end{itemize}
     \end{column}
   \end{columns}
-\end{frame}
-
-\begin{frame}{Adversarial loss (hinge GAN)}
-  A discriminator $D$ learns to tell real EEG $x$ from reconstructions $\hat{x}$;
-  the autoencoder (generator $G$) tries to fool it:
-  \begin{align*}
-    \mathcal{L}_{D} &= \tfrac{1}{2}\,\mathbb{E}_{x}\big[\max(0,\,1-D(x))\big]
-                     + \tfrac{1}{2}\,\mathbb{E}_{\hat{x}}\big[\max(0,\,1+D(\hat{x}))\big]\\[2pt]
-    \mathcal{L}_{\text{adv}}^{G} &= -\,\mathbb{E}_{\hat{x}}\big[D(\hat{x})\big]
-  \end{align*}
 
   \vspace{0.2cm}
-  \begin{columns}[T]
-    \begin{column}{0.5\textwidth}
-      \textbf{Advantages}
-      \begin{itemize}
-        \item \cmark\ Sharper, more realistic reconstructions (avoids the over-smoothing of L1/MSE).
-        \item \cmark\ Learns a data-driven perceptual criterion.
-      \end{itemize}
-    \end{column}
-    \begin{column}{0.5\textwidth}
-      \textbf{Drawbacks}
-      \begin{itemize}
-        \item \xmark\ Training instability: needs a small weight / warm-up.
-        \item \xmark\ Risk of mode collapse.
-        \item \xmark\ Extra discriminator to train and tune.
-      \end{itemize}
-    \end{column}
-  \end{columns}
+  {\footnotesize Valeurs de référence en régime sain : $\Lloss_{\text{SIGReg}} \approx 1.06$,
+  $\Lloss_{\text{align}} \approx 1.17$.}
 \end{frame}
 
 % ======================================================================
-\section{Downstream evaluation}
+\section{Résultats et analyse}
 % ======================================================================
 
-\begin{frame}{Downstream results (BACC)}
+\begin{frame}
+  \frametitle{Analyse du latent global par PCA --- BCI2A (imagerie motrice, 4 classes)}
   \centering
-  \renewcommand{\arraystretch}{1.3}
+  \vfill
+  \includegraphics[width=\linewidth]{figures/output.png}
+
+  \vfill
+  \includegraphics[width=0.52\linewidth]{figures/pca_glob.png}
+  \vfill
+\end{frame}
+
+\begin{frame}{Comparaison aux modèles de l'état de l'art --- balanced accuracy (\%)}
+  \centering
+  \vfill
+  \renewcommand{\arraystretch}{1.25}
   \resizebox{\linewidth}{!}{%
-  \begin{tabular}{l cccccc}
+  \begin{tabular}{l c ccccc}
     \toprule
-    \textbf{Model} & \textbf{BCI2A} & \textbf{PHYSIONETMI} & \textbf{SLEEPEDFX}
-                   & \textbf{SEEDV} & \textbf{FACED} & \textbf{TUAB} \\
+    \textbf{Modèle} & \textbf{\#params (M)}
+      & \textbf{BCI2A} & \textbf{PHYSIONETMI} & \textbf{FACED} & \textbf{SLEEPEDF} & \textbf{TUAB} \\
     \midrule
-    EEG-VAE (VQ-Mamba)        & -- & -- & -- & -- & -- & -- \\
-    EEG-VAE (KL-Mamba)        & -- & -- & -- & -- & -- & -- \\
-    EEG-VAE (VQ-Transformer)  & -- & -- & -- & -- & -- & -- \\
+    CBraMod   & -- & -- & -- & -- & -- & -- \\
+    CSBrain   & -- & -- & -- & -- & -- & -- \\
+    EEGMamba  & -- & -- & -- & -- & -- & -- \\
+    EEGPT     & -- & -- & -- & -- & -- & -- \\
+    LaBraM    & -- & -- & -- & -- & -- & -- \\
+    REVE      & -- & 63.62 & \textbf{63.01} & \textbf{54.42} & -- & -- \\
+    LuMamba   & -- & -- & -- & -- & -- & -- \\
+    LUNA      & -- & -- & -- & -- & -- & -- \\
     \midrule
-    CBraMod                   & -- & -- & -- & -- & -- & -- \\
-    EEGMamba                  & -- & -- & -- & -- & -- & -- \\
-    EEGPT                     & -- & -- & -- & -- & -- & -- \\
-    LUNA                      & -- & -- & -- & -- & -- & -- \\
-    FEMBA                     & -- & -- & -- & -- & -- & -- \\
+    \rowcolor{TPBordeaux!12}
+    \textbf{EEG-FM (ours)} & -- & -- & -- & -- & -- & -- \\
+    \midrule
+    EEGNet \emph{(baseline)} & -- & \textbf{72.66} & 60.46 & 49.67 & -- & -- \\
     \bottomrule
   \end{tabular}}
-
-  \vspace{0.3cm}
-  {\footnotesize Balanced accuracy (BACC), linear-probing / channel-training --- to be filled.}
+  \vfill
 \end{frame}
 
 \end{document}
