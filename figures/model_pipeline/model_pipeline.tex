@@ -1,86 +1,89 @@
-\documentclass[border=16pt]{standalone}
-\usepackage{amsmath}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, calc, backgrounds, fit}
-
+% Active EEGFM encoder and bottleneck only; no decoder or skip connections.
+% Sources: model/model.py; model/modules/{encoder,tokenizer,utils,
+% beamformer_attention,bottleneck}.py; configs/model.yaml; pretrain.py.
+\documentclass[border=5pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,amsmath,amssymb,tikz}
+\usetikzlibrary{arrows.meta,calc,fit,backgrounds}
+\renewcommand{\familydefault}{\sfdefault}
+\definecolor{edge}{HTML}{36424B}
+\definecolor{spatial}{HTML}{E0EFEB}
+\definecolor{temporal}{HTML}{E8E5F3}
+\definecolor{stem}{HTML}{E5EDF7}
+\definecolor{latent}{HTML}{F8EDDA}
 \begin{document}
-\begin{tikzpicture}[
-    font=\small,
-    x=1cm, y=1cm,
-    >={Stealth[length=2.6mm]},
-    io/.style   = {align=center, font=\ttfamily\footnotesize},
-    stage/.style= {draw, rounded corners=3pt, align=center, minimum width=30mm,
-                   minimum height=11mm},
-    adapt/.style= {stage, fill=blue!12},
-    enc/.style  = {stage, fill=teal!16},
-    dec/.style  = {stage, fill=orange!16},
-    bott/.style = {draw, rounded corners=3pt, align=center, minimum width=20mm,
-                   minimum height=10mm, fill=gray!12},
-    code/.style = {draw, rounded corners=2pt, align=center, minimum width=22mm,
-                   minimum height=12mm, fill=yellow!35, thick},
-    flow/.style = {->, thick},
-    lvl/.style  = {font=\ttfamily\scriptsize, gray!60!black},
-]
+\begin{tikzpicture}[font=\small,x=1cm,y=1cm,>={Stealth[length=1.8mm]},
+ block/.style={draw=edge,rounded corners=1.5pt,align=center,inner sep=5pt,minimum height=.7cm},
+ stage/.style={block,text width=2.65cm,font=\footnotesize,minimum height=2cm},
+ flow/.style={->,draw=edge,line width=.65pt},
+ cond/.style={flow,dashed},
+ panel/.style={font=\bfseries,anchor=west},
+ label/.style={font=\footnotesize,align=center}]
+\node[panel] at (0,2.45) {(a) Hierarchical EEG encoder};
+\node[label] (x) at (-.1,0) {EEG\\$B\!\times\!C\!\times\!T$};
+\node[stage,fill=stem] (stem) at (2.65,0) {\textbf{Patch stem}\\Signed log\\Conv--GN--SiLU $\times2$\\Patchify (20)\\LayerNorm $\to$ Linear\\$+E_{\rm ch}+E_{\rm presence}$};
+\node[stage,fill=spatial] (s1) at (6.7,0) {\textbf{Stage 1 $\times2$}\\SpatialConv\\BiMamba2\\ConformerConv\\SwiGLU};
+\node[stage,fill=spatial] (s2) at (10.7,0) {\textbf{Stage 2 $\times2$}\\SpatialConv\\BiMamba2\\ConformerConv\\SwiGLU};
+\node[stage,fill=temporal] (s3) at (14.7,0) {\textbf{Stage 3 $\times3$}\\SpatialConv + Attn.\\BiMamba2\\ConformerConv\\SwiGLU};
+\node[stage,fill=temporal] (s4) at (18.7,0) {\textbf{Stage 4 $\times3$}\\SpatialConv + Attn.\\BiMamba2\\ConformerConv\\SwiGLU};
+\node[block,fill=latent,text width=2.3cm,minimum height=1.35cm] (bott) at (22.75,0) {\textbf{Bottleneck}\\$z,\ z_{\rm glob}$};
+\draw[flow] (x)--(stem); \draw[flow] (stem)--(s1);
+\draw[flow] (s1)--node[above,label]{$\downarrow2$}(s2);
+\draw[flow] (s2)--node[above,label]{$\downarrow2$}(s3);
+\draw[flow] (s3)--node[above,label]{$\downarrow2$}(s4);
+\draw[flow] (s4)--(bott);
+\node[label] at (2.65,1.65) {$N_1=\lfloor T/20\rfloor$\\$D_1=128$};
+\node[label] at (6.7,1.65) {$N_1=\lfloor T/20\rfloor$\\$D_1=128$};
+\node[label] at (10.7,1.65) {$N_2=\lfloor T/40\rfloor$\\$D_2=192$};
+\node[label] at (14.7,1.65) {$N_3=\lfloor T/80\rfloor$\\$D_3=256$};
+\node[label] at (18.7,1.65) {$N_4=\lfloor T/160\rfloor$\\$D_4=384$};
 
-% ---- level (time-resolution) guides on the far left ----
-\node[lvl] at (-4.4, 0)    {$T$};
-\node[lvl] at (-4.4,-2.2)  {$T/2$};
-\node[lvl] at (-4.4,-4.4)  {$T/4$};
-\node[lvl] at (-4.4,-6.6)  {$T/8$};
+\node[panel] at (0,-3.1) {(b) Montage-aware spatial bias};
+% Schematic electrode montage (positions supplied by standard_1020).
+\begin{scope}[shift={(1.2,-4.85)}]
+\draw[edge,line width=.65pt] (0,0) circle (.8);
+\draw[edge] (-.15,.79)--(0,.98)--(.15,.79);
+\draw[edge] (-.79,.18) arc[start angle=90,end angle=270,x radius=.1,y radius=.18];
+\draw[edge] (.79,.18) arc[start angle=90,end angle=-90,x radius=.1,y radius=.18];
+\foreach \xx/\yy in {-.28/.57,.28/.57,-.57/.3,0/.35,.57/.3,-.65/0,-.33/0,0/0,.33/0,.65/0,-.55/-.3,0/-.35,.55/-.3,-.28/-.57,.28/-.57}{
+\filldraw[draw=edge,fill=spatial] (\xx,\yy) circle (.055);
+}
+\end{scope}
+\node[label] at (1.2,-6.15) {Montage $P\in\mathbb{R}^{C\times3}$};
+\node[block,fill=spatial,text width=2.5cm] (unit) at (4.5,-4.85) {Normalize\\$u_i=p_i/\|p_i\|_2$};
+\node[block,fill=spatial,text width=3cm] (geo) at (8.6,-4.85) {Geodesic distances\\$d_{ij}=\arccos(u_i^\top u_j)$};
+\node[block,fill=spatial,text width=3cm] (bins) at (8.6,-6.9) {16 bins $\beta_{ij}$\\$\operatorname{round}(15d_{ij}/d_{\max})$};
+\node[block,fill=spatial,text width=2.5cm] (lookup) at (4.5,-6.9) {Learned lookup\\$E\in\mathbb{R}^{8\times16}$};
+\node[block,fill=spatial,text width=2.3cm] (bias) at (1.2,-7.5) {$b_{hij}=E_{h,\beta_{ij}}$\\$b\in\mathbb{R}^{8\times C\times C}$};
+\draw[flow] (2.1,-4.85)--(unit); \draw[flow] (unit)--(geo);
+\draw[flow] (geo)--(bins); \draw[flow] (bins)--(lookup);
+\draw[flow] (lookup.west)--(2.9,-6.9)|-(bias.east);
+\draw[cond] (bias.west)--(-.8,-7.5)--(-.8,-2)--(18.7,-2)--(s4.south);
+\draw[cond] (14.7,-2)--(s3.south);
+\node[label,fill=white,inner sep=2pt] at (11,-2) {Spatial attention bias};
 
-% ================= ENCODER (left, descending) =================
-\node[enc] (e0) at (0, 0)    {MambaBlock $\times N$\\[1pt]$64$ ch,\ \ $T$};
-\node[enc] (e1) at (0,-2.2)  {MambaBlock $\times N$\\[1pt]$128$ ch,\ \ $T/2$};
-\node[enc] (e2) at (0,-4.4)  {MambaBlock $\times N$\\[1pt]$256$ ch,\ \ $T/4$};
-\node[enc] (e3) at (0,-6.6)  {MambaBlock $\times N$ + mid\\[1pt]$512$ ch,\ \ $T/8$};
+\node[panel] at (0,-9.1) {(c) Temporal downsampling};
+\node[label] (di) at (.25,-10.55) {$N_i,D_i$};
+\node[block,fill=stem,text width=2cm] (pair) at (2.75,-10.55) {Pairwise concat\\$\lfloor N_i/2\rfloor,2D_i$};
+\node[block,fill=stem] (dn) at (5.45,-10.55) {RMSNorm};
+\node[block,fill=stem,text width=1.8cm] (dp) at (8.1,-10.55) {Linear\\$2D_i\!\to\!D_{i+1}$};
+\node[label] (do) at (10.75,-10.55) {$N_{i+1},D_{i+1}$\\$N_{i+1}=\lfloor N_i/2\rfloor$};
+\draw[flow] (di)--(pair); \draw[flow] (pair)--(dn); \draw[flow] (dn)--(dp); \draw[flow] (dp)--(do);
 
-\draw[flow] (e0) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e1);
-\draw[flow] (e1) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e2);
-\draw[flow] (e2) -- node[right=1mm, font=\scriptsize]{DownSample $\downarrow2$} (e3);
-
-% ================= DECODER (right, ascending) =================
-\node[dec] (d0) at (15, 0)   {MambaBlock $\times N$\\[1pt]$64$ ch,\ \ $T$};
-\node[dec] (d1) at (15,-2.2) {MambaBlock $\times N$\\[1pt]$128$ ch,\ \ $T/2$};
-\node[dec] (d2) at (15,-4.4) {MambaBlock $\times N$\\[1pt]$256$ ch,\ \ $T/4$};
-\node[dec] (d3) at (15,-6.6) {mid + MambaBlock $\times N$\\[1pt]$512$ ch,\ \ $T/8$};
-
-\draw[flow] (d3) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d2);
-\draw[flow] (d2) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d1);
-\draw[flow] (d1) -- node[left=1mm, font=\scriptsize]{UpSample $\uparrow2$} (d0);
-
-% ================= FRONT: channel adaptor =================
-\node[io]    (xin)  at (-3.0, 2.1) {$x$\\$(B,\ C_{\text{in}},\ T)$};
-\node[adapt] (ca)   at (0, 2.1) {ChannelAdaptor\\[1pt]$C_{\text{in}}\!\to\!64$};
-\draw[flow] (xin) -- (ca);
-\draw[flow] (ca)  -- (e0);
-
-% ================= OUTPUT: reconstruction =================
-\node[adapt] (co)  at (15, 2.1) {conv\_out\\[1pt]$64\!\to\!C_{\text{out}}$};
-\node[io]    (xout) at (18.0, 2.1) {$\hat{x}$\\$(B,\ C_{\text{out}},\ T)$};
-\draw[flow] (d0) -- (co);
-\draw[flow] (co) -- (xout);
-
-% ================= BOTTOM OF THE U: bottleneck + codebook =================
-\node[bott] (bz) at (4.5,-6.6) {conv\_out\\[1pt]$\to z$};
-\node[code] (cb) at (7.5,-6.6) {VQ codebook\\[1pt]{\scriptsize $K$ codes, dim $z$}};
-\node[bott] (ci) at (10.5,-6.6) {conv\_in\\[1pt]$z\!\to\!512$};
-
-\draw[flow] (e3) -- (bz);
-\draw[flow] (bz) -- (cb);
-\draw[flow] (cb) -- (ci);
-\draw[flow] (ci) -- (d3);
-
-\node[io, below=1mm of cb] {$z:\ (B,\ z_{\text{ch}},\ T/8)$};
-
-% ================= titles / notes =================
-\node[font=\bfseries] at (0,3.3)  {Encoder};
-\node[font=\bfseries] at (15,3.3) {Decoder};
-\node[font=\bfseries] at (7.5,3.3) {EEGVAE\ \ (U-shaped autoencoder)};
-
-\node[align=center, font=\scriptsize] at (7.5,-8.4)
-    {Bottleneck = quantize $z$ to the nearest codebook entries
-     (VQ) \emph{or} a Gaussian posterior (KL).\\[1pt]
-     Decoder mirrors the encoder --- \textbf{no skip connections} (information passes only through $z$).};
-
+\node[panel] at (12.65,-3.1) {(d) Bottleneck and global readout};
+\node (h) at (13,-4.4) {$h_4$};
+\node[block,fill=latent] (bn) at (15.3,-4.4) {RMSNorm};
+\node[block,fill=latent,text width=3.5cm] (z) at (20,-4.4) {$z\in\mathbb{R}^{B\times C\times N_4\times384}$};
+\node[block,fill=latent,text width=3.5cm] (flat) at (20,-5.7) {Flatten $C\!\times\!N_4$ tokens};
+\node[block,fill=latent,text width=3.5cm] (kv) at (20,-7) {Linear $K,V$\\RMSNorm($K$)};
+\node[block,fill=latent,text width=2.85cm] (attn) at (20,-8.45) {Cross-attention\\8 heads};
+\node[block,fill=latent,text width=2.7cm] (query) at (14.7,-8.45) {Learned queries\\$n_q=4$};
+\node[block,text width=1.8cm] (mask) at (24,-8.45) {Channel mask\\$M(p)$};
+\node[block,fill=latent,text width=3.5cm] (merge) at (20,-10.1) {Concat queries\\RMSNorm\\Linear $\to$ Linear};
+\node (global) at (20,-11.45) {$z_{\rm glob}\in\mathbb{R}^{B\times384}$};
+\draw[flow] (h)--(bn); \draw[flow] (bn)--(z); \draw[flow] (z)--(flat);
+\draw[flow] (flat)--(kv); \draw[flow] (kv)--(attn);
+\draw[flow] (query)--(attn); \draw[cond] (mask)--(attn);
+\draw[flow] (attn)--(merge); \draw[flow] (merge)--(global);
 \end{tikzpicture}
 \end{document}

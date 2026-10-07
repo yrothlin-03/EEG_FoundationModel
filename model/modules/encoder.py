@@ -93,6 +93,7 @@ class Encoder(nn.Module):
         else:
             self.stem = PatchStem(C, dim=dims[0], patch=pool,
                                   hidden=patch_hidden, kernel=patch_kernel)
+                                  
         self.dist_bias = DistanceBias(pos, n_heads, n_bins=n_dist_bins)
 
         dpr = torch.linspace(0, drop_path, sum(depths)).tolist()

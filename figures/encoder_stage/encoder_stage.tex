@@ -1,111 +1,93 @@
-\documentclass[border=16pt]{standalone}
-\usepackage{amsmath}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, calc}
-
+% Sources: model/modules/encoder.py, utils.py, mamba_layer.py,
+% beamformer_attention.py. Labels only; configuration: configs/model.yaml.
+\documentclass[border=5pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,amsmath,amssymb,tikz}
+\usetikzlibrary{arrows.meta,calc,fit,backgrounds}
+\renewcommand{\familydefault}{\sfdefault}
+\definecolor{edge}{HTML}{36424B}
+\definecolor{spatial}{HTML}{E0EFEB}
+\definecolor{temporal}{HTML}{E8E5F3}
+\definecolor{conv}{HTML}{E5EDF7}
+\definecolor{ffn}{HTML}{F8EDDA}
 \begin{document}
-\begin{tikzpicture}[
-    font=\small,
-    >={Stealth[length=2.4mm]},
-    io/.style   = {align=center, font=\ttfamily\footnotesize},
-    conv/.style = {draw, rounded corners=2pt, align=center, minimum height=9mm,
-                   minimum width=13mm, fill=blue!10},
-    norm/.style = {draw, rounded corners=2pt, align=center, minimum height=9mm,
-                   minimum width=8mm, fill=teal!14},
-    act/.style  = {draw, rounded corners=2pt, align=center, minimum height=9mm,
-                   minimum width=8mm, fill=orange!16},
-    drop/.style = {draw, rounded corners=2pt, align=center, minimum height=9mm,
-                   minimum width=9mm, fill=gray!12},
-    mamba/.style= {draw, rounded corners=2pt, align=center, minimum height=9mm,
-                   minimum width=16mm, fill=violet!16},
-    ds/.style   = {draw, rounded corners=2pt, align=center, minimum height=12mm,
-                   minimum width=17mm, fill=red!14},
-    stage/.style= {draw, rounded corners=3pt, align=center, minimum height=13mm,
-                   minimum width=27mm, fill=blue!16},
-    add/.style  = {draw, circle, inner sep=0pt, minimum size=6mm, fill=yellow!30},
-    flow/.style = {->, thick},
-    grp/.style  = {draw, dashed, rounded corners=4pt, inner sep=4mm},
-]
+\begin{tikzpicture}[font=\small, x=1cm,y=1cm,>={Stealth[length=1.8mm]},
+ block/.style={draw=edge,rounded corners=1.5pt,align=center,inner sep=5pt,minimum height=.65cm},
+ flow/.style={->,draw=edge,line width=.65pt},
+ cond/.style={flow,dashed},
+ sum/.style={circle,draw=edge,fill=white,inner sep=0pt,minimum size=4.5mm},
+ panel/.style={font=\bfseries,anchor=west},
+ label/.style={font=\footnotesize,align=center}]
+\node[panel] at (0,1.95) {(a) Encoder block};
+\node (x) at (0,0) {$h$};
+\node[block,fill=spatial,text width=3.05cm] (s) at (2.65,0) {RMSNorm\\\textbf{Spatial mixing}\\LayerScale $\cdot$ DropPath};
+\node[sum] (as) at (5.05,0) {$+$};
+\node[block,fill=temporal,text width=3.05cm] (t) at (7.7,0) {RMSNorm\\\textbf{BiMamba2}\\LayerScale $\cdot$ DropPath};
+\node[sum] (at) at (10.1,0) {$+$};
+\node[block,fill=conv,text width=3.05cm] (c) at (12.75,0) {RMSNorm\\\textbf{ConformerConv}\\LayerScale $\cdot$ DropPath};
+\node[sum] (ac) at (15.15,0) {$+$};
+\node[block,fill=ffn,text width=3.05cm] (f) at (17.8,0) {RMSNorm\\\textbf{SwiGLU}\\LayerScale $\cdot$ DropPath};
+\node[sum] (af) at (20.2,0) {$+$};
+\node (y) at (21.15,0) {$h'$};
+\draw[flow] (x)--(s); \draw[flow] (s)--(as); \draw[flow] (as)--(t); \draw[flow] (t)--(at);
+\draw[flow] (at)--(c); \draw[flow] (c)--(ac); \draw[flow] (ac)--(f); \draw[flow] (f)--(af); \draw[flow] (af)--(y);
+\draw[flow] (.5,0)--(.5,1.1)-|(as.north);
+\draw[flow] (5.5,0)--(5.5,1.1)-|(at.north);
+\draw[flow] (10.55,0)--(10.55,1.1)-|(ac.north);
+\draw[flow] (15.6,0)--(15.6,1.1)-|(af.north);
+\node[label] at (10.6,-1.15) {$h,h'\in\mathbb{R}^{B\times C\times N\times D}$};
 
-% ======================================================================
-%  (A)  STAGE-LEVEL VIEW
-% ======================================================================
-\node[io] (xin) {$x$\\$(B,\ C_{\text{in}},\ T)$};
-\node[stage, right=12mm of xin] (mb) {MambaBlock\\[1pt]$\times\,N_{\text{blocks}}$};
-\node[ds, right=14mm of mb] (down) {DownSample\\[1pt]{\footnotesize Conv1d, stride 2}};
-\node[io, right=12mm of down] (xout) {$(B,\ C_{\text{out}},\ T/2)$};
-
-\draw[flow] (xin) -- (mb);
-\draw[flow] (mb) -- node[above, font=\ttfamily\scriptsize]{$(B,C_{\text{out}},T)$} (down);
-\draw[flow] (down) -- (xout);
-
-\node[font=\bfseries] at ($(mb.north)+(0,6mm)$) {Encoding stage $i$};
-
-% ======================================================================
-%  (B)  MAMBABLOCK ZOOM  (well below the stage)
-% ======================================================================
-\coordinate (drow) at ($(xin.south)+(0,-46mm)$);
-\node[io] (bx) at (xin |- drow) {$x$\\$(B,\ C,\ T)$};
-
-% --- conv_block ---
-\node[conv, right=9mm of bx]  (c1) {Conv1d\\$k{=}3$\\$C\!\to\! s$};
-\node[norm, right=4mm of c1]  (n1) {GN};
-\node[act,  right=4mm of n1]  (a1) {SiLU};
-\node[conv, right=4mm of a1]  (c2) {Conv1d\\$k{=}3$\\$s\!\to\! C'$};
-\node[norm, right=4mm of c2]  (n2) {GN};
-\node[act,  right=4mm of n2]  (a2) {SiLU};
-\node[drop, right=4mm of a2]  (d1) {Drop};
-
-% --- mamba_layer ---
-\node[norm,  right=11mm of d1] (n3) {GN};
-\node[mamba, right=4mm of n3]  (mm) {Mamba2\\{\scriptsize seq $=T$}};
-\node[drop,  right=4mm of mm]  (d2) {Drop};
-
-% --- residual add + output ---
-\node[add,  right=11mm of d2] (add) {$+$};
-\node[io,   right=10mm of add] (bout) {$(B,\ C',\ T)$};
-
-% forward path
-\draw[flow] (bx) -- (c1);
-\draw[flow] (c1) -- (n1);
-\draw[flow] (n1) -- (a1);
-\draw[flow] (a1) -- (c2);
-\draw[flow] (c2) -- (n2);
-\draw[flow] (n2) -- (a2);
-\draw[flow] (a2) -- (d1);
-\draw[flow] (d1) -- (n3);
-\draw[flow] (n3) -- (mm);
-\draw[flow] (mm) -- (d2);
-\draw[flow] (d2) -- (add);
-\draw[flow] (add) -- (bout);
-
-% dashed grouping boxes (labels sit just above the boxes)
+\node[panel] at (0,-2) {(b) Spatial mixing};
+\node (hs) at (5,-2.8) {$\widetilde h$};
+\node[block,fill=spatial,text width=2.25cm] (smask) at (1.2,-4) {RMSNorm\\Channel mask};
+\node[block,fill=spatial,text width=2.25cm] (sconv) at (1.2,-6) {Conv2d $1\!\times\!1$\\SiLU\\Conv2d $1\!\times\!1$};
+\node[block,fill=spatial,text width=2.65cm] (stats) at (5,-4) {$\mu_N\Vert\log\sigma_N^2$\\LayerNorm};
+\node[block,fill=spatial,text width=2.65cm] (qk) at (5,-5.3) {Linear $Q,K$\\LayerNorm};
+\node[block,fill=spatial] (qkt) at (5,-6.5) {$QK^\top/\sqrt{d_h}$};
+\node[sum] (biasadd) at (5,-7.55) {$+$};
+\node[block,text width=1.9cm] (bias) at (8.1,-7.55) {$b_{\rm dist}+M(p)$};
+\node[block,fill=spatial] (soft) at (5,-8.55) {Softmax};
+\node[block,fill=spatial] (v) at (9.45,-4) {Linear $V$};
+\node[sum] (av) at (8.1,-8.55) {$\times$};
+\node[block,fill=spatial] (proj) at (8.1,-9.65) {Linear};
+\node[sum] (outadd) at (5,-10.7) {$+$};
+\node (os) at (5,-11.5) {$h_s$};
+\draw[flow] (hs)--(stats);
+\draw[flow] (hs.west)--(1.2,-2.8)--(smask);
+\draw[flow] (hs.east)--(9.45,-2.8)--(v);
+\draw[flow] (smask)--(sconv); \draw[flow] (sconv.south)|-(outadd.west);
+\draw[flow] (stats)--(qk); \draw[flow] (qk)--(qkt); \draw[flow] (qkt)--(biasadd);
+\draw[cond] (bias)--(biasadd); \draw[flow] (biasadd)--(soft);
+\draw[flow] (soft)--node[above,label]{$A$}(av);
+\draw[flow] (v.south)--(9.45,-8.55)--(av.east);
+\draw[flow] (av)--(proj); \draw[flow] (proj.south)|-(outadd.east); \draw[flow] (outadd)--(os);
 \begin{scope}[on background layer]
-    \node[grp, fit=(c1)(d1)] (gconv) {};
-    \node[grp, fit=(n3)(d2)] (gmamba) {};
+\node[draw=edge!55,dashed,rounded corners=2pt,fit=(stats)(qk)(qkt)(biasadd)(bias)(soft)(v)(av)(proj),inner sep=3mm] (attngroup) {};
 \end{scope}
-\node[font=\itshape\footnotesize] at (gconv.north)  [yshift=3mm] {conv\_block};
-\node[font=\itshape\footnotesize] at (gmamba.north) [yshift=3mm] {mamba\_layer};
+\node[label,text width=3.2cm] at (5,-9.65) {Beamformer attention\\Stages 3--4};
 
-% residual shortcut, routed clearly above the group labels
-\coordinate (shy) at ($(bx.north)+(0,17mm)$);
-\draw[flow] (bx.north) -- (bx.north |- shy) -| (add.north);
-\node[font=\scriptsize, align=center] at ($(shy)!0.5!(add |- shy)+(0,2.5mm)$)
-    {shortcut: $1{\times}1$ Conv if $C\neq C'$ (else identity)};
+\node[panel] at (11.5,-2) {(c) Bidirectional Mamba2};
+\node (ht) at (16.45,-2.8) {$\widetilde h$};
+\node[block,fill=temporal,text width=3cm] (tn) at (16.45,-3.65) {RMSNorm $\to (BC,N,D)$};
+\node[block,fill=temporal,text width=2.25cm] (mf) at (13.55,-5.6) {Mamba2$_{\rightarrow}$};
+\node[block,fill=temporal,text width=2.25cm] (flip) at (19.35,-4.65) {Reverse};
+\node[block,fill=temporal,text width=2.25cm] (mb) at (19.35,-5.6) {Mamba2$_{\leftarrow}$};
+\node[block,fill=temporal,text width=2.25cm] (unflip) at (19.35,-6.55) {Reverse};
+\node[sum] (tmadd) at (16.45,-7.3) {$+$};
+\node (ot) at (16.45,-8.05) {$h_t\in\mathbb{R}^{B\times C\times N\times D}$};
+\draw[flow] (ht)--(tn);
+\draw[flow] (tn.west)-|(mf.north); \draw[flow] (tn.east)-|(flip.north);
+\draw[flow] (flip)--(mb); \draw[flow] (mb)--(unflip);
+\draw[flow] (mf.south)|-(tmadd); \draw[flow] (unflip.south)|-(tmadd); \draw[flow] (tmadd)--(ot);
 
-% section title for the zoom + link from the stage
-\node[font=\bfseries\small] (dtitle)
-    at ($(bx.north)!0.5!(bout.north)+(0,27mm)$) {Inside one \texttt{MambaBlock}};
-\draw[densely dashed, gray] (mb.south) -- (dtitle.north);
-
-% notes at the bottom
-\node[align=center, font=\scriptsize]
-    at ($(bx.south)!0.5!(bout.south)+(0,-11mm)$)
-    {In the stage: the 1\textsuperscript{st} block maps $C_{\text{in}}\!\to\!C_{\text{out}}$,
-     the next ones $C_{\text{out}}\!\to\!C_{\text{out}}$.\\[1pt]
-     $s=\big\lfloor (C+C')/2 \big\rfloor$. \quad
-     Mamba2 runs on the transposed sequence $(B,T,C')$;
-     convolutions keep $T$ (stride 1, pad 1).};
-
+\node[panel] at (11.5,-9) {(d) Conformer convolution};
+\node[block,fill=conv] (pw1) at (12.55,-10) {Linear\\GLU};
+\node[block,fill=conv] (dw) at (15.05,-10) {DW Conv1d\\$k=15$};
+\node[block,fill=conv] (gn) at (17.75,-10) {GroupNorm\\SiLU};
+\node[block,fill=conv] (pw2) at (20.2,-10) {Linear};
+\draw[flow] (pw1)--(dw); \draw[flow] (dw)--(gn); \draw[flow] (gn)--(pw2);
+\node (hc) at (12.55,-11.3) {$\widetilde h$};
+\node (oc) at (20.2,-11.3) {$h_c$};
+\draw[flow] (hc)--(pw1); \draw[flow] (pw2)--(oc);
 \end{tikzpicture}
 \end{document}
