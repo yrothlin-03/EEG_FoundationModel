@@ -5,11 +5,13 @@
 
 \usepackage{microtype}
 \usepackage{graphicx}
-\graphicspath{{../figures/}{figures/}}
+\graphicspath{{../figures/}{figures/}{../benchmark/figures/}{benchmark/figures/}}
 \usepackage{subcaption}
 \usepackage{booktabs}
+\usepackage{array}
 \usepackage{float}
 \usepackage{balance}
+\usepackage{placeins}
 
 \usepackage{hyperref}
 
@@ -31,117 +33,923 @@
 \renewcommand{\textfraction}{0.1}
 \raggedbottom
 
-\title{Analysis and comparison }
+\title{Evaluating EEG Foundation Representations:\\Cross-Subject Decoding, Montage Sensitivity, and Latent Structure}
 \author{}
 \date{}
 
 \begin{document}
-\twocolumn[\maketitle]
-
+\twocolumn[
+\maketitle
+\begin{minipage}{\textwidth}
+\begin{abstract}
+EEG foundation models seek transferable representations of heterogeneous
+multivariate time series, but downstream accuracy alone does not establish
+that their latent features capture task-relevant physiology. Random masking,
+reconstruction targets, and the coupling of spatial and temporal learning
+may preserve neural information alongside subject and acquisition effects.
+This study examines eight pretrained models and a compact supervised EEGNet
+baseline. Data preparation covers 14 EEG corpora spanning clinical,
+motor-imagery, affective, sleep, and speech-related tasks; the reported
+comparisons concern four-class BCI Competition IV-2a, with additional REVE
+similarity diagnostics on FACED and PhysioNet motor imagery.
+Average-pooled frozen features yield 26.80--33.31\% balanced accuracy with
+a linear SVM, against a 25\% chance reference. Under a separate
+subject-disjoint protocol, a common token-preserving readout reaches
+65.21\% with REVE, while EEGNet, with approximately 3,000 parameters,
+reaches 76.77\%. Native channels favor CBraMod and EEGMamba, whereas mapping
+favors EEGNet. REVE visualizations exhibit subject-associated organization,
+weak class contrast, and lower held-out energy capture by leading components;
+these observations do not identify artifacts or prove that task information
+is absent. Different subject splits, readout capacities, and input adaptation
+prevent attributing score differences solely to pooling. The findings
+motivate stronger physiological validation, subject-level replication, and
+controls for high-dimensional representation metrics. Waveform reconstruction
+is an imperfect surrogate for physiological relevance, but latent alignment
+alone is not sufficient either. Non-contrastive joint-embedding methods such
+as LeJEPA, potentially combined with reconstruction, merit controlled
+comparison using augmentations that vary nuisance components while preserving
+neural phenomena. Progress should be judged by interpretable and robust
+cross-subject transfer, rather than model scale or a single decoding score.
+\end{abstract}
+\end{minipage}
+\vspace{5mm}
+]
 
 \section{Introduction}
 \label{sec:introduction}
 
-Electroencephalography (EEG) provides a noninvasive measurement of brain
-electrical activity with high temporal resolution. Learning representations
-that transfer across tasks, participants, and recording conditions is a
-central objective for EEG foundation models. Recent approaches, including
-LaBraM, CBraMod, EEGPT, and REVE, use large-scale self-supervised pretraining
-to reduce dependence on task-specific annotations and support multiple
-downstream applications~\cite{jiang2024labram,wang2025cbramod,wang2024eegpt,elouahidi2025reve}.
-Their evaluation also benefits from established supervised baselines such
-as EEGNet, a compact convolutional architecture rather than a pretrained
-foundation model~\cite{lawhern2018eegnet}.
+Electroencephalography (EEG) is a multivariate time series in which temporal
+dynamics and relationships between electrodes jointly carry information.
+A useful general-purpose representation should retain task-relevant activity
+across participants, sessions, electrode layouts, and recording contexts.
+Large-scale self-supervised pretraining aims to reduce dependence on labels,
+but transfer requires more than reconstructing observations or obtaining a
+high score on one dataset. The central question is which aspects of the
+signal are preserved and remain useful under changes in the data distribution.
 
-Strong decoding performance, however, does not by itself establish which
-properties of a recording support a prediction. EEG representations may
-encode task-related neural activity alongside participant identity,
-session characteristics, acquisition settings, and physiological or
-instrumental artifacts. These factors can become predictive when they
-correlate with the target labels. Recent diagnostic work reports substantial
-subject-related structure in several foundation models, while broader
-evaluations reveal model-dependent robustness to noise and channel
-loss~\cite{lin2026identity,sirca2026beyond}. Subject information is not
-necessarily an artifact: it may also reflect meaningful individual
-physiology. Nevertheless, these findings motivate examining what a
-representation preserves, beyond its downstream accuracy.
+\subsection{Foundation Models and Spatiotemporal Learning}
 
-Our exploratory inspections of latent spaces across several EEG datasets
-motivate a closer investigation of this issue. In particular, the
-four-class motor-imagery task in BCI Competition IV dataset 2a provides
-a concrete setting in which to examine whether class separation reflects
-motor-related activity or correlated nuisance signals. The dataset includes
-electrooculographic recordings and expert artifact annotations, which can
-support controlled analyses~\cite{brunner2008bci2a}. Apparent separation in
-a latent-space visualization is insufficient to conclude that a model
-relies on artifacts, or that it fails to encode useful neural information.
-We therefore treat artifact dependence as a hypothesis to test through
-targeted controls and ablations, rather than as an established property of
-all EEG foundation models.
+The comparison includes eight models: CBraMod, EEGMamba, CSBrain,
+LuMamba, LUNA, LaBraM, EEGPT, and REVE. These models represent different approaches to combining spatial and
+temporal information, rather than a single homogeneous class of encoders.
+EEGNet provides a compact supervised comparator~\cite{lawhern2018eegnet}.
+Its task-specific training also distinguishes the value of pretrained
+features from the performance achievable by learning directly from labels.
 
-The pretraining objective is one possible source of differences in the
-information retained by an encoder. Existing methods do not all optimize
-the same reconstruction target: CBraMod and REVE reconstruct masked EEG
-inputs, LaBraM predicts discrete neural codes derived from a learned
-tokenizer, and EEGPT already incorporates alignment between learned
-representations~\cite{wang2025cbramod,elouahidi2025reve,jiang2024labram,wang2024eegpt}.
-Reconstructing a waveform can encourage the preservation of any component
-that contributes to reconstruction error, including nuisance variation.
-This does not imply that signal-space learning is intrinsically
-uninformative, nor that a latent-space objective automatically removes
-artifacts. It instead raises the question of how the learning target and
-the construction of training views jointly influence the resulting
-representation.
+LaBraM models channel--time patch sequences with a Transformer and predicts
+discrete codes from a tokenizer trained through neural spectrum prediction.
+Its targets therefore differ from direct waveform samples~\cite{jiang2024labram}.
+CBraMod instead separates spatial and temporal interactions into parallel
+criss-cross attention mechanisms, with positional encoding adapted to the
+two axes, and reconstructs masked signal patches~\cite{wang2025cbramod}.
+CSBrain extends multiscale modeling through temporal windows, anatomical
+regions, and structured sparse attention linking these scales~\cite{zhou2025csbrain}.
 
-Spatial organization provides a complementary inductive bias. Electrode
-locations constrain how measurements relate across the scalp, and recent
-models explicitly incorporate spatial structure through dedicated mixing
-mechanisms or positional information~\cite{wang2025cbramod,elouahidi2025reve}.
-At the same time, channel availability, electrode configuration, and
-reference choice alter the observations presented to a model. Montage
-effects must therefore be separated from differences in architecture and
-pretraining objective. Controlled montage ablations can help determine
-whether a model benefits from meaningful spatial relationships or remains
-dependent on a particular acquisition configuration. Incorporating
-electrode geometry alone does not establish invariance to these changes.
+EEGPT combines local spatiotemporal encoding with representation alignment
+to a momentum encoder and a masked reconstruction objective. It consequently
+already couples signal-level supervision with latent targets~\cite{wang2024eegpt}.
+REVE uses Transformer processing with positional information that combines
+three-dimensional electrode coordinates and temporal position. Its masked
+autoencoding uses contiguous spatiotemporal blocks, rather than only
+independently missing patches~\cite{elouahidi2025reve}.
 
-Joint-embedding learning offers a way to investigate an alternative to
-direct waveform reconstruction. LeJEPA combines agreement between views of
-the same sample with a regularizer that encourages an isotropic Gaussian
-embedding distribution, providing a mechanism to oppose representation
-collapse~\cite{balestriero2025lejepa}. Its recent video extension, LeVJEPA,
-also investigates this principle for temporally structured
-data~\cite{kuhn2026levjepa}. For EEG, views spanning different temporal
-contexts may encourage shared recording-level representations. However,
-their usefulness depends on which information the views share: persistent
-nuisance factors can also satisfy an agreement objective. The suitability
-of this approach for EEG therefore requires empirical evaluation.
+EEGMamba uses a bidirectional state-space backbone to model dependencies
+among EEG patches. Its pretraining objective is masked
+reconstruction~\cite{wang2025eegmamba}.
+LUNA first unifies variable electrode sets through learned-query
+cross-attention, then applies temporal Transformer processing in a fixed
+latent space~\cite{doner2025luna}. LuMamba uses this channel-unification
+principle with bidirectional Mamba processing and studies reconstruction,
+LeJEPA, and their combination~\cite{broustail2026lumamba}. Thus, joint patch
+modeling, separate axial attention, multiscale regional processing, and
+spatial compression before temporal modeling impose different assumptions
+about how EEG dependencies should be learned.
 
-We introduce EEGFM, a hierarchical encoder
-that combines electrode-wise tokenization, spatial mixing, bidirectional
-Mamba processing, and convolutional temporal modeling. Distance-dependent
-attention biases encode electrode geometry, and a learned-query bottleneck
-aggregates the encoded tokens into a global representation. We train this
-representation with a LeJEPA-inspired objective over global and local
-temporal views, without a waveform reconstruction loss. The study is
-organized around three objectives: characterizing task and nuisance
-information in existing representations, isolating montage effects through
-controlled ablations, and evaluating the contribution of spatial modeling
-and latent-space training in EEGFM.
+\subsection{What Should Self-Supervision Preserve?}
 
-\section{Related Work}
+Random masking is a common pretraining mechanism: selected patches are
+hidden and inferred from the observed context. The prediction target can
+be a waveform, a discrete code, or a learned representation. Mask location,
+extent, and spatial organization determine which dependencies are useful
+for this task. Independent masks can leave nearby temporal samples or
+correlated channels visible; structured masks can demand broader context.
+Neither choice guarantees that successful prediction requires the
+physiological phenomenon relevant to a downstream task.
 
-\section{Methodology}
+Waveform reconstruction is particularly difficult to interpret as a
+physiological learning criterion. EEG measurements combine multiple sources,
+and task-relevant rhythms or transients need not dominate sample-wise error.
+For a squared reconstruction loss, larger residual amplitudes receive more
+weight, regardless of their neural or artifactual origin. Predictable
+background activity or contamination can therefore be useful for minimizing
+the objective. Conversely, reproducing the exact phase of a waveform may
+not be necessary for a task defined by a spectral or spatial pattern.
+These are reasons to question reconstruction loss as a surrogate for
+physiological relevance, not to dismiss temporal signals as uninformative.
+
+Latent-space objectives change the target but do not automatically solve
+this problem. LeJEPA aligns related views and uses distributional
+regularization to oppose collapse without explicit negative
+pairs~\cite{balestriero2025lejepa}. Contrastive methods such as TS2Vec
+separately demonstrate the potential of view-based learning for multivariate
+time series~\cite{yue2022ts2vec}. In EEG, LuMamba reports benefits from
+combining LeJEPA with reconstruction~\cite{broustail2026lumamba}; this argues
+for comparing complementary objectives rather than presuming that latent
+alignment universally supersedes signal reconstruction.
+
+Across these approaches, agreement can preserve subject identity or
+acquisition effects if both views share them. Spatial encoding likewise
+provides a useful inductive bias without guaranteeing invariance to montage
+or reference changes. Recent audits document subject-related structure and
+limitations of robustness and interpretability in EEG foundation
+models~\cite{lin2026identity,sirca2026beyond}. Physiological analyses also
+provide positive evidence, including sensitivity to electrophysiological
+components such as alpha activity~\cite{ogg2025features}. The unresolved
+issue is therefore the strength and transferability of physiological
+evidence, rather than its complete absence from the literature.
+
+\subsection{Scope and Research Questions}
+
+Our data preparation spans 14 corpora covering several EEG paradigms and
+clinical applications. The experiments reported here have a narrower scope:
+we compare cross-subject BCI2A decoding and montage sensitivity, and inspect
+REVE geometry on BCI2A, FACED, and PhysioNet motor imagery. We ask whether
+class information is accessible in frozen features, how readout and montage
+choices affect decoding, and whether latent organization supports a
+physiological interpretation beyond subject-associated variation.
+
+The contribution is an empirical audit with explicit limits on these
+inferences. We separate evaluation protocols from results, compare against
+EEGNet, and combine predictive scores with descriptive diagnostics.
+
+We also developed a hierarchical encoder with a training objective based
+on LeJEPA (\cref{sec:proposed-encoder}). However, within the time available
+for this internship, we were unable to bring this training to convergence.
+No downstream results are therefore reported for this architecture.
+This limitation leaves its effectiveness unresolved and does not establish
+that LeJEPA is unsuitable for EEG.
+
+\section{Data and Evaluation Methods}
 \label{sec:methodology}
 
-We develop EEGFM, a hierarchical EEG encoder that combines electrode-wise
-signal tokenization, spatial mixing, and bidirectional temporal processing.
-The model produces both channel-resolved token embeddings and a global
-representation of each recording window. We train the global representation
-using a multiview objective inspired by LeJEPA~\cite{balestriero2025lejepa},
-combining agreement between views with a distributional regularizer.
-The following formulation describes the patch-based configuration used in
-this work.
+\subsection{Data Coverage and Experimental Scope}
+\label{sec:data}
+
+We processed 14 corpora spanning clinical and experimental EEG tasks
+(\cref{tab:datasets}). TUEG supplies the self-supervised pretraining data
+prepared for the proposed encoder, with TUAB and TUAR subsets excluded.
+This exclusion describes our prepared pretraining corpus; it does not
+establish the training-data composition of the external pretrained models.
+Their corpus overlaps require a separate model-specific audit.
+
+\begin{table*}[t]
+\centering
+\caption{Scope of data preparation. All entries concern EEG or the EEG
+component of a broader recording protocol. Inclusion denotes processing
+coverage, not a completed numerical comparison on every corpus.}
+\label{tab:datasets}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.51\textwidth}}
+\toprule
+Task & Corpora & Role or recording context \\
+\midrule
+Self-supervision & TUEG & Large-scale clinical EEG; TUAB and TUAR subsets excluded from the prepared pretraining data. \\
+Pathology detection & TUAB & Normal versus abnormal clinical recordings. \\
+Sleep staging & Sleep-EDF & EEG from polysomnography with sleep-stage labels. \\
+Seizure detection & CHB-MIT; Siena & Pediatric and adult scalp EEG, respectively. \\
+Motor imagery & BCI IV-2a; PhysioNet MI; SHU-MI & Motor-imagery paradigms; SHU-MI provides 32-channel recordings. \\
+Emotion recognition & SEED-V; FACED & Movie-elicited emotional responses and affective EEG. \\
+Imagined speech & BCI 2020 (Track 3); KaraOne; CHISCO & Imagined speech; phonemes and words; Chinese reading and recall phases. \\
+Speech-related typing & METASPEECH & EEG during typing, with epochs aligned to individual keystrokes. \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+This breadth concerns tasks and recording contexts within EEG, rather than
+joint learning across independent sensor modalities such as EEG and MEG.
+Sleep-EDF originates from polysomnography, but the present analysis does
+not evaluate multimodal fusion. Likewise, typing-aligned METASPEECH epochs
+should not be interpreted as equivalent to covert-speech trials.
+
+Quantitative model comparisons are restricted to the four-class BCI
+Competition IV dataset 2a, abbreviated BCI2A~\cite{brunner2008bci2a}.
+REVE cosine diagnostics additionally cover FACED~\cite{chen2023faced}
+and PhysioNet MI~\cite{schalk2009physionet};
+t-SNE and PCA diagnostics use BCI2A. The broader corpus coverage establishes
+the scope of data preparation and future evaluation, not evidence of
+successful transfer across every listed task.
+
+\subsection{Models, Splits, and Reporting}
+
+The eight foundation models are evaluated with pretrained backbone weights.
+EEGNet is trained from scratch as a supervised baseline. The pooled SVM
+uses seven training and two test subjects; the token-preserving head and
+montage ablation use seven training, one validation, and one test subject.
+These distinct protocols answer related questions but do not form a
+controlled head-only ablation. Each decoding score describes one run,
+without repeated-split uncertainty estimates.
+
+Balanced accuracy is the mean recall across classes and is the primary
+comparison metric; its four-class chance reference is 25\%. Accuracy and
+macro-F1 provide complementary summaries. Numerical differences are
+reported descriptively, without significance claims. Diagnostic bootstrap
+intervals concern subjects, while PCA dispersions concern overlapping
+folds; neither supplies uncertainty for the separate decoding results.
+
+\subsection{Average-Pooled Linear SVM}
+\label{sec:svm-method}
+
+For each frozen feature extractor, all intermediate token dimensions are
+averaged while preserving the final feature dimension. Thus, a tensor
+$H\in\mathbb{R}^{B\times C\times L\times D}$ is reduced to
+\begin{equation}
+    \bar h_b=\frac{1}{CL}\sum_{c=1}^{C}\sum_{l=1}^{L}H_{bcl:}
+    \in\mathbb{R}^{D}.
+\end{equation}
+Here $B$ is the batch size, $C$ the channel count, $L$ the number of
+temporal tokens, and $D$ the feature width. Pooling removes explicit
+channel and temporal indexing. A linear support
+vector machine (SVM) is fitted after feature-wise standardization, with
+the mean and standard deviation estimated from training examples only.
+The regularization parameter is fixed at 1, with inverse-frequency class
+weights. No supervised adaptation of the feature extractor or input
+channel projections is performed in this protocol.
+
+All runs use mapped channels and a subject-disjoint split with seven
+training subjects and two test subjects (random seed 100). No validation
+set or hyperparameter search is used for this comparison. The reported
+metrics summarize test epochs pooled across the two held-out subjects;
+they are not subject-level means or leave-one-subject-out estimates.
+
+\subsection{Common Token-Preserving Readout}
+\label{sec:head-method}
+
+\paragraph{Common readout.}
+All pretrained models use the same readout design, adapted to each backbone's output
+shape, with separately learned head parameters. Pretrained backbone weights
+remain fixed throughout supervised training. Dropout and other
+training-dependent operations within the backbone remain in evaluation
+mode.
+
+Let $H_b=(h_{b1},\ldots,h_{bS})$ be the latent tokens of an example, with
+$h_{bs}\in\mathbb{R}^{D}$. Channel, patch, or summary-token axes are combined
+into the index $s$, without averaging their representations. A shared
+affine projection reduces each token to $q=32$ features, followed by
+concatenation and an affine classifier with $K$ outputs:
+\begin{align}
+    u_{bs}&=P\,\operatorname{Dropout}_{0.2}(h_{bs})+a,\\
+    \ell_b&=W(u_{b1}\Vert\cdots\Vert u_{bS})+b,
+    \label{eq:common-probe}
+\end{align}
+Here $\Vert$ denotes concatenation, $P\in\mathbb{R}^{32\times D}$, and
+$W\in\mathbb{R}^{K\times32S}$. The row-wise weight norms of these two
+maps are constrained to at most 1 and 0.25, respectively.
+
+There is no nonlinear activation between the two maps. With dropout
+disabled at evaluation, the logits are therefore affine in the flattened
+latent features. This is a factorized linear probe: all token positions
+share the same 32-dimensional feature projection. It is more constrained
+than an unrestricted linear classifier on all $SD$ features. A common
+head design also does not imply equal capacity: its parameter count is
+$32(D+1)+K(32S+1)$ and varies with the backbone's token count and width.
+
+\paragraph{Input adaptation.}
+EEGPT and LaBraM additionally use a learned $1\times1$ channel convolution
+before the backbone. Freezing the backbone leaves this adapter trainable,
+and the optimizer updates it together with the head. Their protocol is thus frozen-backbone probing with input
+adaptation, rather than probing a completely fixed feature extractor.
+This distinction must accompany the results, since changes to the adapter
+can change the representations even though pretrained weights remain fixed.
+
+\paragraph{Training and evaluation.}
+Subjects are assigned to disjoint training, validation, and test sets using
+target proportions of 80\%, 10\%, and 10\%, with at least one subject in
+each held-out set. For BCI2A this gives seven training subjects, one
+validation subject, and one test subject. A random seed of 100 is used for
+both the subject split and training randomization.
+This is a single subject-disjoint split, not leave-one-subject-out
+cross-validation.
+
+For the pretrained models, training uses cross-entropy without label
+smoothing, AdamW with learning rate $4\times10^{-4}$ and weight decay 0.01,
+batches of 64, and gradient-norm clipping at 1. Training lasts at most
+50 epochs, with early stopping after ten epochs without improvement in
+validation balanced accuracy. The best validation checkpoint is restored
+before test evaluation. Accuracy, balanced accuracy (mean class recall),
+and macro-F1 are recorded; balanced accuracy is the selection criterion.
+
+EEGNet is a separate supervised baseline trained without pretrained
+weights. Its backbone is optimized together with its classifier, so its
+results must be distinguished from those obtained with frozen pretrained
+representations. Its training uses AdamW with learning rate $10^{-3}$,
+weight decay $10^{-4}$, and dropout 0.25, with the same subject split and
+validation-based selection criterion.
+
+\subsection{Montage Transformation}
+\label{sec:montage-method}
+
+The montage comparison assesses the effect of replacing the native channel
+layout with a fixed target layout. Here, \emph{raw} denotes native channels
+from the preprocessed dataset, not unprocessed EEG. The mapped condition
+uses the nearest-source rule illustrated in \cref{fig:channel-mapping}.
+For target electrode $i$, the closest source electrode $j^*(i)$ supplies
+the complete channel signal if its distance is at most $r$; otherwise the
+target channel is filled with zeros.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{ablation_mapped_vs_raw/channelmapping.pdf}
+    \caption{Channel-mapping rule for the montage ablation. Each fixed target
+    electrode independently selects the closest source within a distance
+    threshold; targets without an eligible source are zero-filled. The
+    symbols $z$ and $z'$ denote channel signals in this schematic, not the
+    latent tokens used elsewhere in the report. This figure describes the
+    transformation and contains no downstream performance comparison.}
+    \label{fig:channel-mapping}
+\end{figure*}
+
+This operation copies signals rather than interpolating several electrodes.
+Different target locations can select the same source, and sources that
+are never selected are omitted. Mapping therefore changes spatial sampling
+and may introduce duplicate or missing channels. Its effect is not limited
+to channel ordering, and improved performance would not by itself demonstrate
+montage invariance or recovery of unobserved activity.
+
+We evaluate the frozen CBraMod and EEGMamba backbones with the common
+head, alongside EEGNet trained end to end. Each condition uses
+seven training subjects, one validation subject, and one test subject.
+The intended control keeps the subject split, underlying windows, labels,
+checkpoint, and training settings fixed within each model. Mapping can
+nevertheless change the readout size through the channel count, so this
+comparison measures the effect of the complete montage-processing pipeline.
+
+\subsection{Latent-Space Diagnostics}
+\label{sec:diagnostic-method}
+
+All descriptive figures use REVE with mapped channels. They are not
+cross-model evidence. Pooling and projection choices differ by analysis
+and are specified below so that their conclusions are not conflated.
+
+\paragraph{t-SNE.}
+The t-SNE analysis~\cite{vandermaaten2008tsne} uses 1,800 BCI2A epochs from
+REVE, sampled without replacement at 200 epochs per subject across all nine
+subjects. Sampling is balanced by subject, not explicitly by class. Token
+features are averaged over the channel and temporal axes, yielding one
+512-dimensional vector per epoch. Features are standardized across the
+visualization sample, reduced to 50 principal components, and embedded
+with perplexity 30, PCA initialization, and 1,000 optimization iterations
+(random seed 100).
+
+\paragraph{Within-subject cosine similarity.}
+To examine class-related angular structure while conditioning on subject,
+we compare distinct pairs of epochs from the same participant. REVE tokens
+are averaged over all axes except batch and feature dimension, then
+$\ell_2$-normalized without centering. For pooled features $h_a,h_b$, the
+similarity is $s_{ab}=h_a^\top h_b/(\|h_a\|_2\|h_b\|_2)$. The retained
+samples contain 2,997 epochs from nine BCI2A subjects, 2,952 from 123 FACED
+subjects, and 2,943 from 109 PHYSIONETMI subjects.
+
+For subject $u$, define
+\begin{equation}
+    \Delta_u=\overline{s}_{u,\mathrm{same}}
+             -\overline{s}_{u,\mathrm{different}},
+    \qquad \overline{\Delta}=\frac{1}{U}\sum_{u=1}^{U}\Delta_u.
+    \label{eq:cosine-gap}
+\end{equation}
+$U$ is the number of retained subjects. Each subject's means use all
+eligible pairs among their retained epochs.
+The reported 95\% percentile bootstrap interval resamples subjects
+5,000 times, rather than treating the many dependent pairs as independent
+observations. Histograms use equal numbers of same-class and different-class
+pairs within each subject, with a common per-subject cap derived from a
+50,000-pair budget per condition. Subjects with fewer eligible pairs
+contribute fewer histogram samples.
+
+\paragraph{Training-only PCA.}
+PCA retains all REVE tokens as a single flattened vector, whereas t-SNE
+and cosine similarity use pooled features. The BCI2A analysis uses nine outer folds, each holding
+out one test subject and the next subject in cyclic order for validation.
+Ten principal components are fitted to centered, unstandardized features
+from the remaining seven subjects. The 512-epoch training budget allocates
+73 epochs per subject, giving 511 sampled training epochs per fold.
+Neither validation nor test examples enter the PCA fit.
+
+The displayed fold reserves A01 for testing and shows validation subject
+A02. RGB colors encode the first three component scores after scaling each
+component by its training-set 1st and 99th percentiles and clipping to
+$[0,1]$. Colors are therefore an unsupervised summary of three latent
+coordinates, not predicted labels, physiological categories, or a measure
+of confidence. The color transform is also fitted without validation or
+test data.
+
+
+
+\section{Results}
+\label{sec:results}
+
+The following comparisons use the protocols in \cref{sec:methodology}.
+We first report decoding and montage results, then examine the geometry
+of REVE representations. Tables retain the individual measured scores;
+percentage-point differences in the text are rounded to two decimals.
+
+\subsection{Linear SVM Probing of Average-Pooled Features}
+\label{sec:svm-probing}
+
+\begin{table}[t]
+    \centering
+    \caption{Linear SVM on average-pooled, frozen features for mapped BCI2A.
+    All metrics are on a 0--1 scale. The split contains seven training and
+    two test subjects.}
+    \label{tab:svm-results}
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrrr}
+        \toprule
+        Model & Accuracy & Bal. acc. & Macro-F1 \\
+        \midrule
+CBraMod & 0.300636 & 0.300846 & 0.299699 \\
+EEGMamba & 0.278837 & 0.278865 & 0.277760 \\
+CSBrain & 0.279746 & 0.279834 & 0.279020 \\
+LuMamba & 0.287012 & 0.287205 & 0.287390 \\
+LUNA & 0.286104 & 0.286117 & 0.286464 \\
+LaBraM & 0.277021 & 0.277174 & 0.273225 \\
+EEGPT & 0.267938 & 0.268049 & 0.262756 \\
+REVE & 0.333333 & 0.333063 & 0.325038 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\Cref{tab:svm-results} reports balanced accuracy ranging from 26.80\%
+to 33.31\%. EEGPT obtains the lowest score and REVE the highest.
+CBraMod achieves 30.08\%, while the other models lie between
+27.72\% and 28.72\%. These estimates are numerically above the 25\%
+four-class balanced-accuracy chance reference, but the absence of repeated
+splits or a permutation test prevents a significance claim. Macro-F1
+follows the same broad pattern, ranging from 0.263 to 0.325.
+
+After average pooling, cross-subject linear discriminability is weak.
+This does not demonstrate complete class inseparability:
+the scores exceed the chance reference numerically, and averaging can
+remove informative spatial or temporal contrasts. The supported conclusion
+is that this particular summary exposes relatively little class information
+to a linear SVM on the held-out subjects, not that the complete latent
+representations contain no task information.
+
+\subsection{Frozen-Backbone Evaluation with a Common Head}
+\label{sec:linear-probing}
+
+\begin{table*}[t]
+    \centering
+    \caption{Mapped BCI2A evaluation with seven training, one validation, and
+    one test subject. Pretrained models use the common token-preserving
+    head with frozen backbone weights; EEGPT and LaBraM also learn input
+    channel adapters. EEGNet is trained end to end with its own classifier.
+    Epoch denotes the checkpoint selected by validation balanced accuracy.
+    Accuracy, balanced accuracy, and macro-F1 are on a 0--1 scale; loss is
+    test cross-entropy.}
+    \label{tab:common-head-results}
+    \small
+    \begin{tabular}{lrrrrr}
+        \toprule
+        Model & Epoch & Accuracy & Bal. acc. & Macro-F1 & Loss \\
+        \midrule
+CBraMod & 21 & 0.366483 & 0.366907 & 0.352562 & 1.313258 \\
+EEGMamba & 3 & 0.348066 & 0.350022 & 0.323536 & 1.326661 \\
+CSBrain & 6 & 0.372007 & 0.372859 & 0.368457 & 1.301348 \\
+LuMamba & 4 & 0.309392 & 0.310068 & 0.297328 & 1.365851 \\
+LUNA & 14 & 0.346225 & 0.347750 & 0.320760 & 1.361484 \\
+LaBraM & 19 & 0.427256 & 0.425955 & 0.424304 & 1.213312 \\
+EEGPT & 26 & 0.534070 & 0.534666 & 0.535005 & 1.051783 \\
+REVE & 11 & 0.651934 & 0.652083 & 0.654002 & 0.919220 \\
+        \midrule
+EEGNet & 49 & 0.767956 & 0.767696 & 0.767876 & 0.618744 \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+REVE leads the pretrained models at 65.21\% balanced accuracy.
+The next best scores are 53.47\% for EEGPT and 42.60\% for LaBraM.
+Other pretrained models score between 31.01\% and 37.29\%
+(\cref{tab:common-head-results}). EEGNet reaches 76.77\%, exceeding REVE
+by 11.56 percentage points, and also has the highest accuracy and macro-F1
+and the lowest cross-entropy in this experiment. This is evidence for a
+strong task-specific supervised baseline under the evaluated conditions,
+not a comparison with fully fine-tuned foundation models.
+
+For every pretrained model, the common-head score is numerically higher
+than its pooled-SVM score. This cannot be attributed solely to the
+readout: the test subjects and selection procedures differ, and EEGPT and
+LaBraM additionally adapt their inputs. In particular, the two affine
+projections do not make the common head a nonlinear classifier of fixed
+features. A matched split with identical adaptation rules is required to
+isolate the effect of retaining individual tokens instead of averaging them.
+
+\subsection{Channel-Mapping Ablation: Raw versus Mapped Montages}
+\label{sec:channel-mapping}
+
+\begin{table*}[t]
+    \centering
+    \caption{Mapped-versus-raw BCI2A ablation with a 7/1/1 subject split.
+    CBraMod and EEGMamba use the common head with a frozen backbone; EEGNet
+    uses its own classifier and is trained end to end. Epoch is selected
+    on validation balanced accuracy. Metrics use a 0--1 scale, except
+    cross-entropy loss. The EEGNet mapped run is distinct from the run in
+    \cref{tab:common-head-results}.}
+    \label{tab:montage-results}
+    \small
+    \begin{tabular}{llrrrrr}
+        \toprule
+        Model & Montage & Epoch & Accuracy & Bal. acc. & Macro-F1 & Loss \\
+        \midrule
+CBraMod & Mapped & 21 & 0.366483 & 0.366907 & 0.352562 & 1.313258 \\
+CBraMod & Raw & 8 & 0.405157 & 0.405605 & 0.402207 & 1.300800 \\
+        \midrule
+EEGMamba & Mapped & 3 & 0.348066 & 0.350022 & 0.323536 & 1.326661 \\
+EEGMamba & Raw & 10 & 0.397790 & 0.400017 & 0.371253 & 1.279251 \\
+        \midrule
+EEGNet & Mapped & 32 & 0.753223 & 0.753001 & 0.753213 & 0.650881 \\
+EEGNet & Raw & 11 & 0.637201 & 0.639129 & 0.628166 & 0.925231 \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+Native channels improve both pretrained models
+(\cref{tab:montage-results}). CBraMod increases from 36.69\% to 40.56\%
+balanced accuracy, a gain of 3.87 percentage points. EEGMamba increases
+from 35.00\% to 40.00\%, a gain of 5.00 points. Accuracy and macro-F1 also
+improve, while cross-entropy decreases. The consistency across these
+metrics supports a raw-montage advantage for these two runs, without
+establishing its reproducibility across participants.
+
+EEGNet shows the opposite pattern: mapped channels yield 75.30\% balanced
+accuracy versus 63.91\% with raw channels, a gain of 11.39 points.
+Accuracy and macro-F1 likewise favor mapping, and loss falls from 0.925231
+to 0.650881. EEGNet outperforms both pretrained models within each montage
+condition. Its mapped score differs from the 76.77\% in the common-head
+comparison; the two runs are retained separately and are not
+averaged or treated as controlled replicates.
+
+\paragraph{Interpretation.}
+These opposite effects argue against a universal benefit of channel
+mapping. Retaining native observations may benefit the pretrained models,
+whereas a fixed layout may help the supervised baseline; these mechanisms
+remain hypotheses. Mapping also omits, duplicates, or zero-fills channels,
+and the selected epochs differ between conditions. The results therefore
+do not isolate geometry from information loss, model capacity, or
+optimization effects. The distance threshold, target montage, coverage
+statistics, and repeated subject-level comparisons are still needed for a
+more complete account of these differences.
+
+\subsection{Subject and Class Organization in t-SNE}
+\label{sec:tsne}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{ablation_tsne/tsne_subject_vs_class.png}
+    \caption{REVE representations of 1,800 mapped BCI2A epochs in one t-SNE
+    embedding. Identical coordinates are colored by subject (left) and
+    class (right). Several neighborhoods are enriched for individual
+    subjects, while class labels are broadly mixed. Standardization, PCA,
+    and t-SNE are fitted on the displayed sample for descriptive analysis;
+    this is not a held-out classification result.}
+    \label{fig:tsne-subject-class}
+\end{figure*}
+
+In \cref{fig:tsne-subject-class}, the left panel contains recognizable
+subject-enriched regions, particularly for A02, A05, A07, and A09, alongside
+substantial overlap elsewhere. Coloring the same coordinates by task class
+reveals no comparably distinct class regions. Subject membership is thus
+more visually apparent than class membership in this particular projection.
+This observation motivates controlling subject identity in subsequent
+analyses and keeping subjects separate during downstream evaluation.
+
+The plot does not quantify how much subject or class information is present
+in the full representation. Averaging tokens can discard task information,
+and a nonlinear two-dimensional embedding can obscure class separation
+available in other directions. Nor can subject-associated structure
+distinguish physiology from session or acquisition effects. Consequently,
+these clusters provide descriptive evidence of subject-related organization,
+not proof of artifact dependence or failed cross-subject decoding.
+
+\subsection{Within-Subject Cosine Similarity}
+\label{sec:cosine}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{ablation_cosine/cosine.png}
+    \caption{Within-subject cosine similarities of mean-pooled REVE
+    representations with mapped channels. Blue and orange histograms
+    compare same-class and different-class pairs. Titles report the
+    equally weighted mean subject gap and its subject-bootstrap 95\%
+    interval; legend means refer to the sampled pairs and need not have
+    the same weighting. The horizontal ranges differ across datasets and
+    are restricted around the central 99\% of sampled similarities.}
+    \label{fig:cosine-within-subject}
+\end{figure*}
+
+The distributions overlap strongly (\cref{fig:cosine-within-subject}).
+For BCI2A, the mean subject gap is about $0.0001$; its displayed
+interval is $[0.0000,0.0001]$. The lower endpoint is rounded, so its printed
+value is insufficient to decide whether the unrounded interval excludes
+zero. FACED and PHYSIONETMI have larger positive gaps,
+$0.0021\;[0.0011,0.0032]$ and $0.0010\;[0.0006,0.0015]$, respectively.
+These positive intervals support a small average class association in
+angular similarity within the sampled subjects, not a decoding accuracy.
+
+Absolute similarities are high for both pair types, with displayed means
+between approximately 0.957 and 0.987. This indicates strongly aligned
+pooled vectors relative to the origin. A shared mean component can produce
+such alignment because features were not centered. High cosine similarity
+therefore does not establish representation collapse, and a small mean
+gap does not exclude informative low-variance directions. The subject-wise
+summary also differs from the histogram mean difference: for example,
+FACED's pair-weighted means differ by 0.0036, while its equally weighted
+subject gap is 0.0021.
+
+\begin{figure*}[t]
+    \centering
+    \begin{subfigure}[c]{0.57\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{ablation_pca/projection_on_pca1_pca2.png}
+        \caption{Validation epochs in the training PCA basis.}
+        \label{fig:pca-scatter}
+    \end{subfigure}\hfill
+    \begin{subfigure}[c]{0.40\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{ablation_pca/mean_pca_rgb.png}
+        \caption{Class means of the three-component RGB encoding.}
+        \label{fig:pca-rgb}
+    \end{subfigure}
+
+    \medskip
+    \begin{subfigure}{\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{ablation_pca/pca_by_window.png}
+        \caption{Eight separately sampled four-second epochs, with latent RGB backgrounds.}
+        \label{fig:pca-epochs}
+    \end{subfigure}
+    \caption{Training-fitted PCA of mapped REVE features, evaluated visually
+    on BCI2A validation subject A02. The scatter and class-color means use
+    all 553 validation epochs (138, 140, 135, and 140 in classes 0--3).
+    In the signal panel, the trace is normalized input channel index 2;
+    dashed boundaries separate independent epochs. The horizontal axis is
+    cumulative display time, not one continuous EEG recording.}
+    \label{fig:pca-diagnostics}
+\end{figure*}
+
+\subsection{PCA across Subjects and Epoch-Level Signal Inspection}
+\label{sec:pca}
+
+\paragraph{Variance and stability.}
+The cumulative top-ten training explained variance is $21.20\%\pm0.31\%$ across folds. Subspace stability is assessed
+by refitting PCA on five random 80\% subsets of each fold's training
+sample. For reference and refitted orthonormal loading matrices $V$ and
+$\widetilde V$, the score is
+$10^{-1}\sum_{k=1}^{10}\sigma_k^2(V\widetilde V^\top)$, the mean squared
+cosine of their principal angles. The mean fold score is
+$0.909\pm0.014$. These dispersions are fold standard deviations, not
+confidence intervals; folds share much of their training data.
+
+The same components capture $14.08\%\pm2.37\%$ of held-out test energy,
+measured relative to the \emph{training} mean. This is not variance about
+the test subject's own mean and can include a between-subject mean shift.
+The lower capture than on training data is compatible with a shift in
+feature structure, but also with fitting PCA to maximize training variance.
+The results indicate a reasonably stable leading subspace under training
+subsampling while leaving most feature variation outside its ten dimensions.
+They do not measure class discrimination.
+
+\paragraph{Class overlap and signal context.}
+In the displayed fold, PC1 and PC2 account for 5.1\% and 3.1\% of training
+variance. The four validation classes overlap extensively in this plane
+(\cref{fig:pca-scatter}), and their average RGB colors are similar
+(\cref{fig:pca-rgb}). Together, these observations show little visual class
+separation in the leading coordinates for A02. Since the first two
+components explain only about 8.2\% of training variance and PCA ignores
+labels, this does not rule out separation in later components or in the
+full token representation.
+
+\Cref{fig:pca-epochs} places the latent colors alongside eight reproducibly
+sampled epochs. Background colors vary between examples, including examples
+of the same class; the seventh displayed epoch contains particularly large
+transients on the plotted channel. This juxtaposition motivates testing
+associations with signal amplitude or artifacts, but it does not establish
+such an association. The embedding uses all channels, the trace shows only
+one, and neither artifact labels nor quantitative signal--latent correlations
+are included. Calling these transients ocular or muscular artifacts would
+therefore exceed the available evidence.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Predictive accuracy and physiological evidence.}
+These experiments distinguish successful prediction from evidence that a
+representation captures task-relevant physiological mechanisms. Neither
+classification accuracy nor a visually structured latent space identifies
+the source of the predictive signal. The present results do not establish
+that the pretrained features encode transferable physiological markers,
+independently of participant characteristics, acquisition conditions, or
+artifacts. This is a limitation of the evidence, rather than proof that
+such markers are absent from the representations.
+
+Physiological evidence in the broader literature is heterogeneous.
+For example, relevance analyses identify task-appropriate brain
+regions, although stable attribution maps can coexist with degraded
+predictions under perturbation~\cite{sirca2026beyond}. Other work separates
+subject-related information from established physiological markers through
+targeted controls~\cite{lin2026identity}. A separate study demonstrates representation sensitivity to alpha activity
+and individual electrophysiological variation~\cite{ogg2025features}.
+Such findings preclude a blanket claim that foundation models have learned
+no physiological features. They do not, however, establish that the same
+mechanism supports reliable decoding across subjects and recording conditions.
+
+\paragraph{Subject structure and transfer.}
+The REVE t-SNE display contains more apparent subject organization than
+class organization. Together with the weak pooled-SVM results, this raises
+a concrete concern: learning may retain subject-dependent cues that do not
+transfer reliably to new participants. These cues could include artifacts,
+but also genuine individual physiology or session effects. The plot alone
+cannot identify their origin, quantify their dominance in the full space,
+or extend this finding to every evaluated model. Independent diagnostic
+work nevertheless supports treating subject identity as a serious potential
+shortcut in foundation-model evaluation~\cite{lin2026identity}.
+
+Subject-disjoint evaluation is necessary for testing transfer, but one
+held-out participant cannot characterize a population. Repeated splits or
+leave-one-subject-out evaluation, followed by cross-session and cross-dataset
+testing, would strengthen the conclusions. Subject-identity decoding and
+comparisons with artifact annotations would help determine whether an
+improvement reflects task information or a persistent nuisance variable.
+The observed montage sensitivity further shows that transfer depends on
+how recordings are presented to the model.
+
+\paragraph{A compact supervised baseline.}
+The evaluated EEGNet baseline has approximately 3,000 parameters, yet it
+outperforms every frozen foundation model in the mapped common-head
+comparison. Its balanced accuracy of 76.77\% exceeds the best pretrained
+result, REVE at 65.21\%, by 11.56 points. EEGNet also leads the montage
+ablation in both mapped and raw conditions. Thus, it is consistently the
+stronger baseline within the reported comparable experiments, despite its
+small size. This supports retaining compact, task-specific models as
+serious comparators~\cite{lawhern2018eegnet}.
+
+This advantage is conditional on the evaluated training regimes: EEGNet
+learns all its features from task labels, whereas the foundation backbones
+remain frozen. Their optimization settings also differ. The findings
+therefore do not establish that EEGNet always exceeds foundation models
+across datasets, tasks, or full fine-tuning protocols. They show that model
+scale and pretraining alone are insufficient to guarantee better decoding
+in this BCI2A evaluation.
+
+\paragraph{Pooling, dimensionality, and interpretability.}
+Average-pooled features yield only 26.80--33.31\% balanced accuracy with a
+linear SVM, compared with a 25\% chance reference. They consequently show
+weak transferable linear separation under this protocol. Pooling can
+remove contrasts between channels or time points, however, so these
+results cannot establish inseparability of all latent features. Prior
+work similarly identifies pooling as a limitation of frozen-feature
+assessment~\cite{sirca2026beyond}. The higher token-preserving scores motivate
+a matched pooling ablation rather than a claim that nonlinear classification
+alone resolves the problem.
+
+High-dimensional representations also complicate interpretation. Retaining
+more tokens increases the downstream parameter count and can improve the
+fit to incidental correlations when subjects are few. Some representation
+similarity measures have specific high-dimensional failure modes: for
+example, CCA-type statistics become uninformative when feature dimension
+exceeds the number of observations~\cite{kornblith2019similarity}. This does
+not imply that high dimensionality automatically inflates properly held-out
+accuracy, nor that the reported scores are artifacts. It motivates matched
+probe capacities, training-only dimensionality reduction, and shuffled-label
+or random-feature controls that respect the subject structure.
+
+Accuracy should therefore be accompanied by evidence about what the model
+uses: perturbations of selected frequency bands and regions, sensitivity
+to physiological markers, robustness to artifact removal, and replication
+across subjects. The strongly aligned uncentered cosine vectors and the
+small leading-component class contrast are useful diagnostics, but neither
+is a direct measurement of physiological meaning. A favorable metric must
+be interpreted together with its feature transformation, effective capacity,
+and sampling unit.
+
+\paragraph{Learning invariances with LeJEPA.}
+LeJEPA offers a way to align representations of related views while
+regularizing their distribution. More precisely, it is a non-contrastive
+joint-embedding method: its anti-collapse mechanism uses SIGReg rather
+than explicit negative pairs~\cite{balestriero2025lejepa}. Contrastive
+self-supervision has separately shown strong results on time-series
+benchmarks, including multivariate data, as illustrated by
+TS2Vec~\cite{yue2022ts2vec}. LuMamba further evaluates LeJEPA on EEG and reports stronger transfer
+with a combined reconstruction and alignment objective than with either
+alone~\cite{broustail2026lumamba}. These results motivate hybrid as well as
+pure latent objectives; they do not establish physiological specificity
+or invariance to artifacts.
+
+For an EEG application, a central research objective is to construct views
+that preserve the neural phenomenon of interest while varying nuisance
+components. Candidate augmentations include independently varying
+physiologically plausible ocular or muscle contamination, bounded sensor
+gain changes, and spatially constrained channel masking. Where paired
+contaminated and artifact-reduced signals are available, they could provide
+an additional invariance test. These are proposed experiments, not outcomes
+established by the present benchmark.
+
+The transformations must be validated for the task: aggressive filtering,
+amplitude changes, or temporal warping may remove neural information along
+with artifacts. Augmentations should vary nuisance content independently
+between views; an artifact preserved in both views can itself satisfy the
+alignment objective. Equally, suppressing all subject information is not
+an appropriate universal target, since some individual physiological
+variation may be relevant. Useful invariance must be demonstrated through
+artifact robustness together with preserved marker sensitivity and
+held-out task performance.
+
+\paragraph{Limitations and priorities for validation.}
+The number of prepared corpora exceeds the coverage of the reported
+experiments. Eight-model decoding results on one task and diagnostic
+figures from one encoder cannot establish universal properties of EEG
+foundation learning. External models also differ in pretraining data,
+architecture, representation size, and input adaptation, so this audit
+cannot causally rank their pretraining objectives. Single-run scores and
+one held-out test subject in the common-head comparison limit population-level
+claims. The two EEGNet mapped runs are distinct observations, not a
+replication estimate.
+
+A stronger evaluation should cross readout type and pooling under identical
+subject splits, control trainable adapters and classifier capacity, and
+compare frozen, fine-tuned, and randomly initialized encoders. Multiple
+seeds and held-out subjects should accompany subject-level uncertainty
+estimates. Artifact annotations, physiological marker tests, and
+cross-session or cross-corpus transfer would then address whether gains
+reflect useful invariances. Incomplete reporting of dataset versions, exact split identities,
+preprocessing choices, montage specifications, and potential pretraining
+overlap further limits reproducibility and attribution of performance
+differences.
+
+\balance
+\section{Conclusion}
+\label{sec:conclusion}
+
+The central challenge for EEG foundation models is to learn latent
+representations that preserve relevant multivariate dynamics while
+remaining useful across subjects and recording conditions. In the present
+BCI2A experiments, compact supervised EEGNet outperforms all frozen
+foundation backbones under the compared protocols. Average-pooled SVM
+features show weak transferable class discrimination, and montage changes
+have model-dependent effects. REVE diagnostics reveal subject-associated
+organization without identifying its physiological or artifactual origin.
+These observations qualify the evidence for general-purpose representations;
+they do not establish their impossibility.
+
+No learning objective can be selected as universally best from these data.
+Signal reconstruction retains detailed observations but need not prioritize
+physiological mechanisms. Latent alignment can encourage invariance while
+also preserving nuisance factors shared between views. Joint spatial and
+temporal modeling, meaningful prediction targets, and carefully validated
+augmentations should therefore be studied together. LeJEPA and hybrid
+reconstruction--alignment objectives are relevant candidates, provided
+that the intended invariances preserve task-related neural information.
+The additional encoder specification in \cref{sec:proposed-encoder} is a
+proposal for such experiments, not an empirically supported solution.
+
+The breadth of the prepared EEG corpora makes evaluation across clinical,
+affective, motor, sleep, and speech-related settings possible, but that
+broader validation remains to be reported. Progress should be judged by
+reproducible cross-subject and cross-dataset transfer, competitive compact
+baselines, and direct evidence about the physiological content of latent
+features. Model size, low reconstruction error, or favorable geometric
+metrics alone are insufficient criteria for useful foundation learning.
+
+\begingroup
+\small
+\raggedright
+\bibliographystyle{plain}
+\IfFileExists{references.bib}{\bibliography{references}}{\bibliography{report/references}}
+\endgroup
+
+\clearpage
+\nobalance
+\appendix
+\setcounter{equation}{0}
+\renewcommand{\theequation}{A.\arabic{equation}}
+\section{Proposed Encoder and Joint-Embedding Training}
+\label{sec:proposed-encoder}
+
+This appendix specifies an additional hierarchical EEG encoder and a
+candidate training procedure. None of the quantitative results in
+\cref{sec:results} evaluates this architecture. The design is retained to
+make the proposed research direction precise; its components, augmentations,
+and objective require controlled ablation before any performance or
+physiological claim can be made. It is distinct from the eight pretrained
+models compared in the main text.
+
+The encoder combines electrode-wise tokenization, spatial mixing, and
+bidirectional temporal processing. It returns channel-resolved tokens
+and a global representation. The proposed global objective follows
+LeJEPA-style view agreement and distributional regularization without
+waveform reconstruction. The specification below defines a patch-based
+configuration, rather than a validated optimal architecture.
 
 Let $X\in\mathbb{R}^{B\times C\times T}$ denote a batch of EEG windows, where
 $B$ is the batch size, $C$ the number of channels in a fixed canonical order,
@@ -162,7 +970,7 @@ The presence input is labeled $p$ in the figures and $a$ in the text.
 \begin{figure*}[t]
     \centering
     \includegraphics[width=\textwidth]{model_pipeline/model_pipeline.pdf}
-    \caption{EEGFM architecture. A patch stem feeds four encoder stages with
+    \caption{Model architecture. A patch stem feeds four encoder stages with
     progressively shorter temporal sequences and larger feature dimensions.
     Geodesic distances between electrode coordinates are quantized into
     16 bins and mapped to learned attention biases in the last two stages.
@@ -170,7 +978,7 @@ The presence input is labeled $p$ in the figures and $a$ in the text.
     $z_{\mathrm{glob}}$ obtained with four learned queries. The input has shape
     $B\times C\times T$; stage lengths are
     $N_i=\lfloor T/(20\cdot2^{i-1})\rfloor$ for $i=1,\ldots,4$.
-    Feature widths correspond to the configured encoder.}
+    Feature widths correspond to the proposed architecture.}
     \label{fig:model-pipeline}
 \end{figure*}
 
@@ -184,7 +992,7 @@ embeddings and $g\in\mathbb{R}^{B\times D_z}$ contains the global embeddings.
 These correspond to the outputs $z$ and $z_{\mathrm{glob}}$ in the figures.
 The channel axis is preserved throughout the encoder; only temporal
 resolution and feature dimension change. The input length $T$ is variable;
-the configured encoder uses $D_z=384$. At a sampling rate of 200\,Hz,
+the encoder uses $D_z=384$. At a sampling rate of 200\,Hz,
 an input window spans $T/200$ seconds.
 
 \paragraph{Signal tokenization.}
@@ -300,7 +1108,7 @@ During training, DropPath multiplies a branch by
 $\xi/(1-\rho)$, with $\xi\sim\operatorname{Bernoulli}(1-\rho)$ independently
 sampled per batch example and branch. The rate $\rho$ increases linearly
 from zero to 0.15 over the ten blocks. Ordinary dropout is zero in the
-reference configuration.
+reference architecture.
 
 \paragraph{Convolutional spatial mixing.}
 Let $U$ denote the input to the spatial module, already normalized by the
@@ -334,7 +1142,7 @@ The distances are discretized into $K_d=16$ bins,
     \label{eq:distance-bins}
 \end{equation}
 where the denominator is clamped from below by
-$\varepsilon=10^{-8}$. The resulting integer indices are fixed buffers.
+$\varepsilon=10^{-8}$. The resulting integer indices remain fixed during training.
 A learned table $E\in\mathbb{R}^{A\times K_d}$, initialized to zero,
 defines the head-specific bias $b_{hij}=E_{h,\beta_{ij}}$.
 This table is shared across the attention blocks of the encoder.
@@ -441,7 +1249,7 @@ in \cref{eq:residual-block}.
     \centering
     \includegraphics[width=\textwidth]{training_pipeline/training_pipeline.pdf}
     \caption{Multiview LeJEPA training. Two global and six local views are
-    encoded by the same EEGFM parameters. All view embeddings are aligned
+    encoded by the same shared model. All view embeddings are aligned
     with the mean of the global embeddings of their source window. SIGReg
     is evaluated across the batch separately for each view and then averaged.
     The weighted loss updates the complete encoder and global readout.
@@ -455,16 +1263,18 @@ Isotropic Gaussian Regularization~\cite{balestriero2025lejepa}, abbreviated SIGR
 Our EEG adaptation applies both terms directly to the global readout
 in \cref{eq:global-embedding}. It uses a single shared encoder, with no
 separate teacher, stop-gradient target, predictor network, or additional
-projection head. The active training path does not reconstruct EEG signals.
+projection head. The training objective does not reconstruct EEG signals.
 
-For each source window $X_b$, the data loader supplies $V_g=2$ global views
+For each source window $X_b$, we sample $V_g=2$ global views
 and $V_\ell=6$ local views. We denote their union by
 $x_b^{(v)}=\mathcal{T}_v(X_b)$, $v=1,\ldots,V$, where $V=V_g+V_\ell=8$ and
 the first $V_g$ indices designate the global views.
-The augmentation configuration includes additive noise, global and
+The candidate augmentations include additive noise, global and
 channel-wise amplitude scaling, temporal shifts, and temporal, frequency,
-and spatial masking. The same presence codes $a_b$ accompany all views of
-a window. Each view is passed through the same model:
+and spatial masking. These transformations have not been validated as preserving physiological
+markers or removing artifacts. The same presence codes $a_b$ accompany
+all views of a window; spatial masking is an augmentation of observed
+signals rather than a change to the recorded channel-availability metadata. Each view is passed through the same model:
 \begin{equation}
     y_b^{(v)}=g_\theta(x_b^{(v)},a_b;P)
       \in\mathbb{R}^{D_z}.
@@ -486,7 +1296,7 @@ Both global and local embeddings contribute to the alignment loss,
          \|y_b^{(v)}-c_b\|_2^2.
     \label{eq:alignment}
 \end{equation}
-The factor $D_z^{-1}$ matches averaging over features in the implementation.
+The factor $D_z^{-1}$ normalizes the loss by the feature dimension.
 Gradients propagate through both the individual embeddings and the center
 $c_b$. Alignment alone admits a constant representation, motivating the
 additional distributional constraint.
@@ -508,7 +1318,7 @@ $\varphi_0(t)=\exp(-t^2/2)$. Define
     e_{vk}(t)=
       |\widehat\varphi_{vk}(t)-\varphi_0(t)|^2\varphi_0(t).
 \end{equation}
-The implemented per-view regularizer approximates
+The per-view regularizer approximates
 \begin{equation}
     \mathcal{R}_v=\frac{B}{K}\sum_{k=1}^{K}
        \int_{-5}^{5}e_{vk}(t)\,\mathrm{d}t
@@ -537,12 +1347,12 @@ also constrains their scale. The final regularizer is
 \end{equation}
 Thus, views are not pooled together as independent samples for SIGReg.
 The same random directions are reused across views within a step by seeding
-the sampler with the global step index. If distributed training is
-initialized, characteristic-function sums and sample counts are aggregated
+the sampler with the global step index. In distributed training, characteristic-function sums and sample counts are aggregated
 across workers; $B$ in \cref{eq:empirical-cf,eq:sigreg-integral,eq:sigreg-discrete}
 then denotes the aggregated batch size. The regularizer is evaluated in
 float32 when embeddings are produced in reduced precision.
 
+\balance
 \paragraph{Objective and optimization.}
 The complete objective is
 \begin{equation}
@@ -551,17 +1361,16 @@ The complete objective is
     \qquad\lambda=0.05.
     \label{eq:total-objective}
 \end{equation}
-The reference configuration selects TUEG windows with mapped channels and
-enables normalization in the data loader. The optimizer is AdamW with
+The proposed training uses normalized TUEG windows with mapped channels,
+excluding the TUAB and TUAR subsets. The optimizer is AdamW with
 initial learning rate $10^{-4}$, momentum coefficients $(0.9,0.95)$,
-and weight decay 0.05 on the designated parameter group. Biases,
+and weight decay 0.05. Biases,
 normalization parameters, embeddings, learned queries, LayerScale vectors,
-and the spatial bias table are excluded from weight decay by the model's
-parameter-group rules. The total gradient norm is clipped at one.
+and the spatial bias table are excluded from weight decay. The total gradient norm is clipped at one.
 A cosine learning-rate schedule is stepped after every optimizer update,
 with a 10,000-step horizon and minimum learning rate $10^{-5}$.
-The configuration uses batches of 16, bfloat16 autocasting, and gradient
-checkpointing within encoder blocks. It specifies 20 epochs, capped at
+The prescribed schedule uses batches of 16, bfloat16 mixed precision, and gradient
+checkpointing within encoder blocks. Its duration is 20 epochs, capped at
 500 training batches and 100 validation batches per epoch.
 
 The objective encourages agreement under the selected view transformations
@@ -571,43 +1380,4 @@ or artifacts shared across views. Whether the resulting representations
 retain useful information under montage changes must therefore be
 established by downstream evaluations and ablations.
 
-\balance
-\section{Results}
-
-\subsection{Linear Probing}
-
-Linear probing assesses how readily task labels can be decoded from a
-pretrained representation without adapting the backbone. Each foundation
-model is frozen and used in evaluation mode to extract features $H=f_\theta(X)$.
-Since output shapes differ across models, all non-batch dimensions are
-flattened into one feature vector per example:
-\begin{equation}
-    U=\operatorname{Flatten}_{\mathrm{non\text{-}batch}}(H)
-    \in\mathbb{R}^{B\times F}.
-\end{equation}
-Thus, outputs of shape $B\times C\times D$ or $B\times C\times L\times D$
-yield $F=CD$ or $F=CLD$, respectively, preserving channel and token features
-without pooling. Each backbone has its own probe and a fixed feature
-dimension within the evaluation setting. Only the linear classifier is
-trained on labeled training examples, using either a single affine layer
-with a classification loss or a linear support vector machine (SVM).
-Performance on held-out data measures the linear accessibility of
-task-related information in the frozen features. This limits the contribution
-of a flexible downstream classifier, while preserving the representations'
-full feature structure.
-
-\subsection{Ablation study on }
-
-
-\section{Discussion and Conclusion}
-
-
-
-
-\begingroup
-\small
-\raggedright
-\bibliographystyle{plain}
-\IfFileExists{references.bib}{\bibliography{references}}{\bibliography{report/references}}
-\endgroup
 \end{document}

@@ -1,5 +1,3 @@
-% Sources: pretrain.py; utils/pretraining_trainer.py, pretraining_loss.py.
-% Configuration: configs/pretraining.yaml. No decoder in this training path.
 \documentclass[border=5pt]{standalone}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern,amsmath,amssymb,tikz}
@@ -18,7 +16,7 @@
 \node (x) at (0,0) {$x$};
 \node[block,fill=global,text width=2.35cm] (vg) at (2.4,1.25) {Global views\\$V_g=2$};
 \node[block,fill=local,text width=2.35cm] (vl) at (2.4,-1.25) {Local views\\$V_\ell=6$};
-\node[block,fill=encoder,text width=2.3cm,minimum height=3.4cm] (enc) at (6.5,0) {\textbf{EEGFM}\\$f_\theta$\\[7pt]Encoder\\$\downarrow$\\Global pooling\\$D=384$};
+\node[block,fill=encoder,text width=2.3cm,minimum height=3.4cm] (enc) at (6.5,0) {\textbf{Shared model}\\$f_\theta$\\[7pt]Encoder\\$\downarrow$\\Global pooling\\$D=384$};
 \node[block,fill=global] (zg) at (10.3,1.25) {$Z_g\in\mathbb{R}^{B\times2\times D}$};
 \node[block,fill=local] (zl) at (10.3,-1.25) {$Z_\ell\in\mathbb{R}^{B\times6\times D}$};
 \node[block,fill=global,text width=3.2cm] (center) at (14.5,2.5) {Global center\\$\displaystyle c_b=\frac{1}{2}\sum_{g=1}^{2}Z_{g,b,g,:}$};
