@@ -1,0 +1,22 @@
+name: eegfm
+
+pretrained_weights: models/checkpoints/EEGFM/pretraining_final.pt
+use_pretrained_weights: true
+channel_mode: mapped
+
+dropout: 0.2
+head: probe # all_patch_reps, probe, official, conv, attn
+attn_heads: 8
+attn_queries: 1
+
+epochs: 50
+batch_size: 64
+lr: 0.0004
+weight_decay: 0.01
+optimizer: AdamW
+clip_value: 1.0
+label_smoothing: 0.0
+multi_lr: true
+frozen: true
+seed: 8
+data_seed: 100

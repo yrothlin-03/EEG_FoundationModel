@@ -1,0 +1,90 @@
+data:
+  batch_size: 64
+  split_ratio: [0.8, 0.1, 0.1]
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: false
+  seed: 100
+  channel_mode: "raw"
+  return_ch_names: false
+  scale_factor: 1.0
+  datasets: "BCI2A"
+
+  
+
+
+BCI2020:
+  time_length: 3
+  n_channels: 60
+  n_classes: 5
+
+BCI2A:
+  time_length: 4
+  n_channels: 22
+  n_classes: 4
+
+CHBMIT:
+  time_length: 10
+  n_channels: null
+  n_classes: 2
+
+CHISCO:
+  time_length: 3
+  n_channels: null
+  n_classes: null
+
+FACED:
+  time_length: 10
+  n_channels: 30
+  n_classes: 9
+
+KARAONE:
+  time_length: 5
+  n_channels: null
+  n_classes: 11
+
+METASPEECH:
+  time_length: 1
+  n_channels: null
+  n_classes: 27
+
+PHYSIONETMI:
+  time_length: 4
+  n_channels: 64
+  n_classes: 4
+
+SEEDV:
+  time_length: 1
+  n_channels: 58
+  n_classes: 5
+
+SHUMI:
+  time_length: 4
+  n_channels: 32
+  n_classes: 2
+
+SIENA:
+  time_length: 10
+  n_channels: 49
+  n_classes: 2
+
+SLEEPEDF:
+  time_length: 30
+  n_channels: 7
+  n_classes: 5
+
+TEEG2:
+  time_length: 1
+  n_channels: null
+  n_classes: null
+
+TUAB:
+  time_length: 10
+  n_channels: 36
+  n_classes: 2
+
+TUEG:
+  time_length: 30
+  n_channels: 41
+  n_classes: null
+
